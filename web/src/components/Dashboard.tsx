@@ -20,6 +20,7 @@ import {
   getCalibrationAlpha,
   getEnvGrid,
   getHotspots,
+  getLiveHotspots,
   getRecurrence,
   getRegionMonthEnv,
   getRegions,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/fireService";
 import { bboxCenter, CUSTOM_REGION, DEFAULT_REGION, FALLBACK_REGIONS, inBBox, IOT_STATIONS, MONTHS_LONG } from "@/lib/regions";
 import { fetchLiveReadings, type LiveReadingsResult } from "@/lib/iot";
+import { getSupabase } from "@/lib/supabase";
 import { anomalyPct, monthlyBaseline, quantile } from "@/lib/stats";
 import { computeSpreadVectors, dominantBearing, compassLabel } from "@/lib/spread";
 import { buildSusceptibilityFromGrid } from "@/lib/susceptibility";
@@ -62,9 +64,10 @@ export default function Dashboard() {
   const [selectedYear, setSelectedYear] = useState(DEFAULT_YEAR);
   const [section, setSection] = useState<Section>("resumen");
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [layers, setLayers] = useState<MapLayers>({ hotspots: true, spread: true, susceptibility: false, iot: true, wind: true });
+  const [layers, setLayers] = useState<MapLayers>({ hotspots: true, live: true, spread: true, susceptibility: false, iot: true, wind: true });
   const [calendar, setCalendar] = useState<CalendarResult | null>(null);
   const [hotspots, setHotspots] = useState<HotspotsResult | null>(null);
+  const [liveHotspots, setLiveHotspots] = useState<import("@/types/fire").LiveHotspot[]>([]);
   const [recurrence, setRecurrence] = useState<RecurrenceCell[]>([]);
   const [regionEnv, setRegionEnv] = useState<RegionMonthEnv[]>([]);
   const [envGrid, setEnvGrid] = useState<EnvGridCell[]>([]);
@@ -167,6 +170,31 @@ export default function Dashboard() {
       clearInterval(id);
     };
   }, []);
+
+  // Detecciones satelitales recientes: refresco periódico + Supabase Realtime.
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    const sb = getSupabase();
+    const refresh = async () => {
+      try {
+        const rows = await getLiveHotspots(bbox, 72);
+        if (!cancelled) setLiveHotspots(rows);
+      } catch {
+        // Conserva la última consulta válida; nunca inventa detecciones.
+      }
+    };
+    void refresh();
+    const timer = setInterval(refresh, 5 * 60_000);
+    const channel = sb?.channel("pyrosync-live-hotspots")
+      .on("postgres_changes", { event: "*", schema: "public", table: "live_hotspots" }, () => void refresh())
+      .subscribe();
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      if (channel) void sb?.removeChannel(channel);
+    };
+  }, [ready, bbox]);
 
   // ---------------------------------------------------------------- derivados
   const region = regions.find((r) => r.key === regionKey) ?? null;
@@ -488,6 +516,7 @@ export default function Dashboard() {
             }
             bbox={bbox}
             hotspots={rows}
+            liveHotspots={liveHotspots}
             spread={spread}
             susceptibility={susceptibility}
             iot={iot}
