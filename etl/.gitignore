@@ -3,3 +3,5 @@ raw_data/*.csv
 harmonized_output.csv
 __pycache__/
 raw_data/*.txt
+aux_data/rasters/
+aux_data/*.csv
