@@ -360,7 +360,7 @@ export default function Dashboard() {
   const noData = !loadingCal && calendar && cells.every((c) => c.active_cells === 0);
   const calibrationNote =
     calendar?.source === "supabase"
-      ? "Calibrado en Córdoba 2012–2024 (ETL)"
+      ? "Calibrado en Córdoba nov-2012 a 2024 (ETL)"
       : "Calibrado en Córdoba 2012–2024 · datos mock";
 
   return (

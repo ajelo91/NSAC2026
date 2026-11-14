@@ -59,7 +59,7 @@ export function buildPreventionActions(c: AreaConditions): PreventionAction[] {
       severity: "critical",
       triggered: c.meanSlope > THRESHOLDS.steepSlopeDeg && c.meanNdvi >= THRESHOLDS.highNdvi,
       evidence: `Pendiente media ${f(c.meanSlope, 1)}° · ${f(c.steepShare * 100)} % de celdas > 20° · NDVI ${c.meanNdvi.toFixed(2)}`,
-      sources: ["NASA SRTM", "ESA Sentinel-2 (NDVI)"],
+      sources: ["NASA SRTM", "NASA MODIS NDVI (MOD13A3)"],
     },
     {
       id: "burn-ban",
@@ -77,7 +77,7 @@ export function buildPreventionActions(c: AreaConditions): PreventionAction[] {
       severity: "warning",
       triggered: c.steepShare > THRESHOLDS.steepShareCritical && c.meanNdvi >= THRESHOLDS.highNdvi - 0.05,
       evidence: `${f(c.steepShare * 100)} % de celdas activas en pendiente crítica · NDVI ${c.meanNdvi.toFixed(2)}`,
-      sources: ["NASA SRTM", "ESA Sentinel-2"],
+      sources: ["NASA SRTM", "NASA MODIS NDVI (MOD13A3)"],
     },
     {
       id: "early-warning",
@@ -90,12 +90,12 @@ export function buildPreventionActions(c: AreaConditions): PreventionAction[] {
     },
     {
       id: "radar",
-      title: "Priorizar radar banda L (SAOCOM) sobre ópticos",
-      detail: "Nubosidad alta: posible subdetección óptica/térmica; usar SAOCOM para humedad de suelo y cicatrices.",
+      title: "Priorizar radar SAR sobre sensores ópticos",
+      detail: "Nubosidad alta: posible subdetección óptica/térmica; solicitar adquisiciones SAR (p. ej. SAOCOM banda L vía Charter) para humedad de suelo y cicatrices.",
       severity: "info",
       triggered: c.cloudCover >= THRESHOLDS.highCloudPct,
       evidence: `Nubosidad ${f(c.cloudCover)} % (MODIS Cloud Mask)`,
-      sources: ["MODIS Cloud Mask", "CONAE SAOCOM"],
+      sources: ["NASA MODIS (MOD09GA)", "CONAE SAOCOM (pedido)"],
     },
     {
       id: "downwind",

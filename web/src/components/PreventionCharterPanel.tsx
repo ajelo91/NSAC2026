@@ -45,7 +45,11 @@ export default function PreventionCharterPanel({ conditions, scenarioLabel, iot,
   const light = LIGHT[charter.status];
 
   const liveSource = iot[0]?.reading.source;
-  const gusty = iot.filter(({ reading }) => (reading.wind_gust_kmh ?? 0) > THRESHOLDS.gustKmh);
+  // Con lecturas simuladas no se emiten alertas: solo con datos en vivo (Meteomatics)
+  const gusty =
+    liveSource === "meteomatics"
+      ? iot.filter(({ reading }) => (reading.wind_gust_kmh ?? 0) > THRESHOLDS.gustKmh)
+      : [];
   const hasSoilPct = iot.some(({ reading }) => reading.soil_moisture_pct != null);
   const liveDry = gusty.filter(
     ({ reading }) => reading.soil_moisture_pct != null && reading.soil_moisture_pct < THRESHOLDS.drySoilPct,
@@ -202,13 +206,15 @@ export default function PreventionCharterPanel({ conditions, scenarioLabel, iot,
             </table>
           </div>
           <p className={`mt-2 text-[11px] ${liveDry.length || gusty.length ? "text-rose-300" : "text-slate-400"}`}>
-            {liveDry.length
-              ? `Prohibición de quemas sugerida en ${liveDry.map((x) => x.station.name).join(", ")} (suelo < 15 % y ráfagas > 35 km/h).`
-              : gusty.length
-                ? `Ráfagas > 35 km/h en ${gusty.map((x) => x.station.name).join(", ")}.${
-                    hasSoilPct ? "" : " Falta humedad de suelo volumétrica en tiempo real para completar la regla de prohibición."
-                  }`
-                : "Ninguna estación supera hoy ráfagas de 35 km/h."}
+            {liveSource !== "meteomatics"
+              ? "Sin datos en vivo: no se evalúan alertas con lecturas simuladas."
+              : liveDry.length
+                ? `Prohibición de quemas sugerida en ${liveDry.map((x) => x.station.name).join(", ")} (suelo < 15 % y ráfagas > 35 km/h).`
+                : gusty.length
+                  ? `Ráfagas > 35 km/h en ${gusty.map((x) => x.station.name).join(", ")}.${
+                      hasSoilPct ? "" : " Falta humedad de suelo volumétrica en tiempo real para completar la regla de prohibición."
+                    }`
+                  : "Ninguna estación supera hoy ráfagas de 35 km/h."}
           </p>
           <p className="mt-1 text-[10px] text-slate-500">
             {liveSource === "meteomatics"

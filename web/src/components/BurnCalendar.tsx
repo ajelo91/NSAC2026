@@ -62,7 +62,7 @@ export default function BurnCalendar(props: Props) {
           </h2>
           <p className="mt-0.5 text-[11px] text-slate-400">
             {mode === "harmonized"
-              ? `Σ harmonized_weight por mes · α = ${props.alpha?.toFixed(3) ?? "—"} calibrado en Sierras de Córdoba (2012–2024)`
+              ? `Σ harmonized_weight por mes · α = ${props.alpha?.toFixed(3) ?? "—"} calibrado en Sierras de Córdoba (nov-2012 a 2024)`
               : "Σ detecciones crudas MODIS + VIIRS sin armonizar (observar el salto artificial de 2012)"}
           </p>
         </div>
@@ -156,7 +156,7 @@ export default function BurnCalendar(props: Props) {
                             mode === "harmonized" ? "eventos armonizados" : "detecciones crudas"
                           } · ${c.active_cells} celdas-día · nubosidad ${c.avg_cloud_cover?.toFixed(0) ?? "—"} %${
                             c.cloud_origin === "region" ? " (promedio regional MODIS)" : c.cloud_origin === "model" ? " (modelo)" : ""
-                          }${cloudy ? " — baja visibilidad óptica: SAOCOM (radar banda L) compensa" : ""}`}
+                          }${cloudy ? " — baja visibilidad óptica: posible subdetección de focos" : ""}`}
                           aria-label={`${MONTHS_LONG[c.month - 1]} ${year}: ${compact(v)}`}
                         >
                           {v > 0 ? compact(v) : ""}
@@ -195,15 +195,15 @@ export default function BurnCalendar(props: Props) {
             {compact(max)} <span className="text-slate-500">(escala √)</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <Cloud className="h-3 w-3" aria-hidden /> Nubosidad ≥ {CLOUD_FLAG_PCT} % (MODIS Cloud Mask): baja visibilidad
-            óptica, SAOCOM compensa
+            <Cloud className="h-3 w-3" aria-hidden /> Nubosidad ≥ {CLOUD_FLAG_PCT} % (MODIS): baja visibilidad óptica; posible
+            subdetección
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-4 bg-[repeating-linear-gradient(45deg,#0f172a,#0f172a_3px,#1e293b_3px,#1e293b_6px)]" />
             Sin cobertura
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="inline-block w-4 border-t border-dashed border-sky-500" /> Inicio VIIRS (ene-2012)
+            <span className="inline-block w-4 border-t border-dashed border-sky-500" /> Inicio VIIRS (nov-2012, archivo FIRMS)
           </span>
         </div>
       </div>
