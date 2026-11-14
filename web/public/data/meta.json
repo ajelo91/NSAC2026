@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-11-14T19:08:17+00:00",
+  "alpha": 0.557177,
+  "date_range": [
+    "2000-11-01",
+    "2026-10-31"
+  ],
+  "rows": {
+    "hotspots.csv": 27778,
+    "region_month_env.csv": 644,
+    "env_grid_clim.csv": 23808
+  },
+  "source": "NASA FIRMS MODIS C6.1 + VIIRS S-NPP C2 armonizado (etl/harmonize.py)"
+}

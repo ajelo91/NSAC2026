@@ -3,27 +3,28 @@
 import { useEffect, useRef } from "react";
 import { Bot, X } from "lucide-react";
 import type { DataSource } from "@/types/fire";
+import type { IotSource } from "@/lib/iot";
 
 interface Props {
-  liveSource?: "meteomatics" | "simulated" | null;
+  liveSource?: IotSource | null;
   open: boolean;
   onClose: () => void;
   alpha: number | null;
   dataSource: DataSource | null;
 }
 
-type Status = "Integrado" | "Modelo paramétrico" | "Simulado" | "Protocolo" | "No usado" | "En vivo";
+type Status = "Integrado" | "Copia estática" | "Sin conexión" | "Protocolo" | "No usado" | "En vivo";
 
-/** Estado de cada fuente según de dónde lee la app (Supabase con ETL real vs. mock en memoria). */
+/** Estado de cada fuente: Supabase en vivo o copia estática de los mismos datos reales (web/public/data). */
 function sources(db: boolean, live: boolean): { agency: string; product: string; variable: string; role: string; status: Status }[] {
-  const etl: Status = db ? "Integrado" : "Modelo paramétrico";
+  const etl: Status = db ? "Integrado" : "Copia estática";
   return [
     {
       agency: "NASA FIRMS",
       product: "MODIS C6.1 (1 km) + VIIRS S-NPP 375 m",
       variable: "Focos activos, FRP, confianza",
       role: "Serie 2000–2026 armonizada en grilla 0.01° (Etapas 1–4)",
-      status: db ? "Integrado" : "Simulado",
+      status: etl,
     },
     {
       agency: "NASA SRTM",
@@ -65,7 +66,7 @@ function sources(db: boolean, live: boolean): { agency: string; product: string;
       product: "Modelo mix en 4 estaciones de la Comarca Andina (cada 10 min)",
       variable: "T, HR, viento, ráfagas, índice de humedad de suelo",
       role: "Condiciones actuales; regla de ráfagas > 35 km/h",
-      status: live ? "En vivo" : "Simulado",
+      status: live ? "En vivo" : "Sin conexión",
     },
     {
       agency: "CONAE SAOCOM 1A/1B",
@@ -93,8 +94,8 @@ function sources(db: boolean, live: boolean): { agency: string; product: string;
 
 const STATUS_STYLE: Record<Status, string> = {
   Integrado: "border-emerald-700/60 bg-emerald-500/10 text-emerald-300",
-  "Modelo paramétrico": "border-amber-700/60 bg-amber-500/10 text-amber-300",
-  Simulado: "border-amber-700/60 bg-amber-500/10 text-amber-300",
+  "Copia estática": "border-sky-700/60 bg-sky-500/10 text-sky-300",
+  "Sin conexión": "border-slate-700 bg-slate-800 text-slate-400",
   Protocolo: "border-sky-700/60 bg-sky-500/10 text-sky-300",
   "No usado": "border-slate-700 bg-slate-800 text-slate-400",
   "En vivo": "border-emerald-700/60 bg-emerald-500/10 text-emerald-300",
@@ -182,7 +183,7 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource, liv
               <>
                 {" "}
                 (<b className="font-mono text-slate-100">α = {alpha.toFixed(4)}</b>
-                {dataSource === "mock" ? ", sobre datos mock" : ""})
+                )
               </>
             )}
             ; Patagonia, con inviernos muy nublados, recibe el mismo factor para eliminar el salto artificial de 2012.
@@ -251,11 +252,11 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource, liv
         </div>
         <p className="mt-2 text-[12px] text-slate-400">
           <b>Integrado</b>: valores reales procesados por el ETL (<code>etl/env/</code>: Earth Engine + NASA POWER) y
-          servidos desde Supabase (<code>env_source = &apos;AUX&apos;</code>). <b>Modelo paramétrico</b>: climatologías
-          aproximadas usadas solo cuando la app corre sin base de datos. El mapa de susceptibilidad (ISF) todavía usa el
-          modelo paramétrico solo si falta la grilla real (<code>env_grid_clim</code>, climatología mensual 0,05° de SRTM, GLDAS/SMAP y POWER). Las ráfagas usan el viento máximo diario de NASA POWER (<code>WS10M_MAX</code>, máximo de promedios horarios, no ráfaga instantánea); si falta, se estiman como viento medio × 1,45.
-          {dataSource === "mock" &&
-            " Esta sesión no tiene Supabase configurado: focos y variables son sintéticos, generados en el navegador."}
+          servidos desde Supabase (<code>env_source = &apos;AUX&apos;</code>). <b>Copia estática</b>: si la base no responde, la
+          app lee una copia de esos mismos datos reales exportada por <code>etl/export_web_snapshot.py</code>; nunca genera
+          valores. El mapa de susceptibilidad (ISF) usa la grilla real <code>env_grid_clim</code> (climatología mensual 0,05° de
+          SRTM, GLDAS/SMAP y POWER); donde no existe, no se dibuja. <b>Sin conexión</b>: si Meteomatics no responde, las
+          estaciones no muestran ni evalúan lecturas. Las ráfagas usan el viento máximo diario de NASA POWER (<code>WS10M_MAX</code>, máximo de promedios horarios, no ráfaga instantánea); si falta, se estiman como viento medio × 1,45.
         </p>
 
         <H>5. Declaración de uso de IA</H>
@@ -264,13 +265,14 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource, liv
           <div className="space-y-1.5">
             <p>
               El equipo usó <b>Claude (Anthropic)</b> como asistente de desarrollo para escribir el pipeline ETL en Python,
-              el esquema y las funciones SQL/PostGIS, la aplicación Next.js y los generadores de datos sintéticos de
-              prueba.
+              el esquema y las funciones SQL/PostGIS, la aplicación Next.js y un generador sintético usado solo para probar el ETL
+              (<code>--generate-sample</code>), que la aplicación no utiliza.
             </p>
             <p>
               Las fórmulas científicas provienen de la metodología definida por el equipo (2 desarrolladores backend + 1
-              geólogo), que revisa y valida los resultados. La IA no se usó para producir observaciones: todo dato sintético o
-              modelado está etiquetado como tal en la interfaz, en el CSV exportado y en la base de datos.
+              geólogo), que revisa y valida los resultados. La IA no se usó para producir observaciones: todos los valores que
+              muestra la app provienen de NASA FIRMS, Earth Engine (SRTM, GLDAS, SMAP, MODIS), NASA POWER y Meteomatics, y cada
+              uno indica su fuente en la interfaz y en el CSV exportado.
             </p>
           </div>
         </div>

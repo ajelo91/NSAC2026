@@ -8,9 +8,8 @@
  *   R: celdas-día activas 2000–2026 de la celda / percentil 95 del área (supuesto), tope 100.
  * Clases de riesgo (supuesto de esta implementación): Bajo < 40 ≤ Moderado < 55 ≤ Alto < 70 ≤ Crítico.
  */
-import type { BBox, EnvGridCell, RecurrenceCell } from "@/types/fire";
-import { envFor } from "./envModel";
-import { clamp } from "./rng";
+import type { EnvGridCell, RecurrenceCell } from "@/types/fire";
+import { clamp } from "./math";
 import { quantile } from "./stats";
 
 export type RiskLevel = "Bajo" | "Moderado" | "Alto" | "Crítico";
@@ -42,45 +41,7 @@ export interface SusceptibilityCell {
   soil: number;
   wind: number;
   recurrence: number; // celdas-día históricas
-  source: "real" | "model"; // climatología real (env_grid_clim) o modelo paramétrico
-}
-
-export function buildSusceptibilityGrid(
-  bbox: BBox,
-  year: number,
-  month: number,
-  recurrence: RecurrenceCell[],
-  recurrenceCellDeg: number,
-): SusceptibilityCell[] {
-  const [minLon, minLat, maxLon, maxLat] = bbox;
-  const span = Math.max(maxLon - minLon, maxLat - minLat);
-  const step = Math.max(span / 36, 0.02);
-  const recMap = new Map(recurrence.map((r) => [`${r.lat_idx}_${r.lon_idx}`, r.cell_days]));
-  const p95 = Math.max(quantile(recurrence.map((r) => r.cell_days), 0.95), 1);
-
-  const cells: SusceptibilityCell[] = [];
-  for (let lat = minLat; lat < maxLat - 1e-9; lat += step) {
-    for (let lon = minLon; lon < maxLon - 1e-9; lon += step) {
-      const la1 = Math.min(lat + step, maxLat);
-      const lo1 = Math.min(lon + step, maxLon);
-      const c: [number, number] = [(lat + la1) / 2, (lon + lo1) / 2];
-      const env = envFor(c[0], c[1], year, month);
-      const rec = recMap.get(`${Math.floor(c[0] / recurrenceCellDeg)}_${Math.floor(c[1] / recurrenceCellDeg)}`) ?? 0;
-      const value = isf(env.slope_deg, env.soil_moisture_pct, env.wind_speed_kmh, rec / p95);
-      cells.push({
-        bounds: [[lat, lon], [la1, lo1]],
-        center: c,
-        isf: value,
-        level: riskLevel(value),
-        slope: env.slope_deg,
-        soil: env.soil_moisture_pct,
-        wind: env.wind_speed_kmh,
-        recurrence: rec,
-        source: "model",
-      });
-    }
-  }
-  return cells;
+  source: "real"; // climatología real (env_grid_clim)
 }
 
 /** ISF con la climatología REAL del mes (SRTM, GLDAS/SMAP, POWER) en celdas de 0.05°. */

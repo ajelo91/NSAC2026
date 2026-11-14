@@ -155,7 +155,7 @@ export default function BurnCalendar(props: Props) {
                           title={`${MONTHS_LONG[c.month - 1]} ${year}: ${formatNumber(v, mode === "harmonized" ? 1 : 0)} ${
                             mode === "harmonized" ? "eventos armonizados" : "detecciones crudas"
                           } · ${c.active_cells} celdas-día · nubosidad ${c.avg_cloud_cover?.toFixed(0) ?? "—"} %${
-                            c.cloud_origin === "region" ? " (promedio regional MODIS)" : c.cloud_origin === "model" ? " (modelo)" : ""
+                            c.cloud_origin === "region" ? " (promedio regional MODIS)" : ""
                           }${cloudy ? " — baja visibilidad óptica: posible subdetección de focos" : ""}`}
                           aria-label={`${MONTHS_LONG[c.month - 1]} ${year}: ${compact(v)}`}
                         >

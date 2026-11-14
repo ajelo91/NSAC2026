@@ -33,7 +33,7 @@ export interface AreaConditions {
   windDirDeg: number;
   windKmh: number;
   /** De dónde salen pendiente/humedad/NDVI/viento del escenario */
-  basis?: "fire-cells" | "region" | "fire-cells-year" | "model";
+  basis?: "fire-cells" | "region" | "fire-cells-year";
 }
 
 export type Severity = "info" | "warning" | "critical";

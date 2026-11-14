@@ -4,7 +4,7 @@
  *
  * Las credenciales viven SOLO en el servidor (variables sin NEXT_PUBLIC_):
  *   METEOMATICS_USERNAME, METEOMATICS_PASSWORD
- * Sin credenciales responde 503 y la web usa lecturas simuladas, marcadas como tales.
+ * Sin credenciales responde 503 y la web muestra "sin datos en vivo" (no inventa lecturas).
  * Respuestas cacheadas 10 min (memoria + CDN) para no agotar el cupo del plan.
  */
 import { IOT_STATIONS } from "@/lib/regions";

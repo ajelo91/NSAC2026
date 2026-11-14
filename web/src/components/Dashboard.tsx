@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Info } from "lucide-react";
+import { AlertCircle, X } from "lucide-react";
 import type {
   BBox,
   CalendarResult,
@@ -10,73 +10,64 @@ import type {
   MapLayers,
   Palette,
   RecurrenceCell,
-  RegionKey,
+  Region,
   RegionMonthEnv,
   SeriesMode,
-  StudyRegion,
 } from "@/types/fire";
 import {
   downloadText,
   getBurningCalendar,
   getCalibrationAlpha,
-  getHotspots,
   getEnvGrid,
+  getHotspots,
   getRecurrence,
   getRegionMonthEnv,
+  getRegions,
   hotspotsToCsv,
   RECURRENCE_CELL_DEG,
 } from "@/lib/fireService";
-import {
-  bboxCenter,
-  DEFAULT_REGION,
-  formatBBox,
-  inBBox,
-  IOT_STATIONS,
-  MONTHS_LONG,
-  REGIONS,
-  YEARS,
-} from "@/lib/regions";
-import { envFor } from "@/lib/envModel";
+import { bboxCenter, CUSTOM_REGION, DEFAULT_REGION, FALLBACK_REGIONS, inBBox, IOT_STATIONS, MONTHS_LONG } from "@/lib/regions";
 import { fetchLiveReadings, type LiveReadingsResult } from "@/lib/iot";
-import { anomalyPct, cellValue, monthlyBaseline, quantile } from "@/lib/stats";
+import { anomalyPct, monthlyBaseline, quantile } from "@/lib/stats";
 import { computeSpreadVectors, dominantBearing, compassLabel } from "@/lib/spread";
-import { buildSusceptibilityFromGrid, buildSusceptibilityGrid } from "@/lib/susceptibility";
+import { buildSusceptibilityFromGrid } from "@/lib/susceptibility";
 import { THRESHOLDS, type AreaConditions } from "@/lib/prevention";
-import HeaderBar from "./HeaderBar";
+import { readUrlState, writeUrlState, type Section } from "@/lib/urlState";
+import TopBar from "./TopBar";
+import Sidebar from "./Sidebar";
 import MapSelector from "./MapSelector";
 import type { WindOverlay } from "./MapView";
-import KpiCards from "./KpiCards";
 import BurnCalendar from "./BurnCalendar";
 import AnomalyChart from "./AnomalyChart";
-import PreventionCharterPanel from "./PreventionCharterPanel";
 import MethodologyModal from "./MethodologyModal";
+import SummaryPanel from "./panels/SummaryPanel";
+import RiskPanel from "./panels/RiskPanel";
+import CharterPanel from "./panels/CharterPanel";
+import DataPanel from "./panels/DataPanel";
 
 const DEFAULT_YEAR = 2025;
-/** Cono de avance: ROS ≈ 6 % de la velocidad del viento durante 6 h (regla empírica indicativa). */
+/** Cono de avance: velocidad de propagación ≈ 6 % de la velocidad del viento durante 6 h (regla empírica). */
 const CONE_ROS_FRACTION = 0.06;
 const CONE_HOURS = 6;
 
-const defer = () => new Promise((r) => setTimeout(r, 0));
-
 export default function Dashboard() {
-  const [regionKey, setRegionKey] = useState<RegionKey>(DEFAULT_REGION);
-  const [bbox, setBbox] = useState<BBox>(REGIONS[DEFAULT_REGION].bbox);
+  const [ready, setReady] = useState(false);
+  const [regions, setRegions] = useState<Region[]>(FALLBACK_REGIONS);
+  const [regionKey, setRegionKey] = useState<string>(DEFAULT_REGION);
+  const [customLabel, setCustomLabel] = useState<string | null>(null);
+  const [bbox, setBbox] = useState<BBox>(FALLBACK_REGIONS[0].bbox);
   const [excludeNonFire, setExcludeNonFire] = useState(true);
   const [mode, setMode] = useState<SeriesMode>("harmonized");
   const [palette, setPalette] = useState<Palette>("viridis");
   const [selectedYear, setSelectedYear] = useState(DEFAULT_YEAR);
-  const [layers, setLayers] = useState<MapLayers>({
-    hotspots: true,
-    spread: true,
-    susceptibility: false,
-    iot: true,
-    wind: true,
-  });
+  const [section, setSection] = useState<Section>("resumen");
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [layers, setLayers] = useState<MapLayers>({ hotspots: true, spread: true, susceptibility: false, iot: true, wind: true });
   const [calendar, setCalendar] = useState<CalendarResult | null>(null);
   const [hotspots, setHotspots] = useState<HotspotsResult | null>(null);
   const [recurrence, setRecurrence] = useState<RecurrenceCell[]>([]);
   const [regionEnv, setRegionEnv] = useState<RegionMonthEnv[]>([]);
-  const [envGrid, setEnvGrid] = useState<EnvGridCell[] | null>(null);
+  const [envGrid, setEnvGrid] = useState<EnvGridCell[]>([]);
   const [alpha, setAlpha] = useState<number | null>(null);
   const [loadingCal, setLoadingCal] = useState(true);
   const [loadingHs, setLoadingHs] = useState(true);
@@ -85,12 +76,51 @@ export default function Dashboard() {
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // ---------------------------------------------------------------- datos
+  // ---------------------------------------------------------------- inicio: catálogo + URL
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const [{ regions: list }, url] = [await getRegions(), readUrlState()];
+      if (cancelled) return;
+      setRegions(list);
+      if (url.bbox) {
+        setRegionKey(CUSTOM_REGION);
+        setBbox(url.bbox);
+        setCustomLabel(url.place ?? null);
+      } else {
+        const r = list.find((x) => x.key === url.region) ?? list.find((x) => x.key === DEFAULT_REGION) ?? list[0];
+        setRegionKey(r.key);
+        setBbox(r.bbox);
+        if (!url.year && r.defaultYear) setSelectedYear(r.defaultYear);
+      }
+      if (url.year) setSelectedYear(url.year);
+      if (url.section) setSection(url.section);
+      if (url.mode) setMode(url.mode);
+      setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    writeUrlState({
+      region: regionKey,
+      bbox: regionKey === CUSTOM_REGION ? bbox : undefined,
+      place: customLabel ?? undefined,
+      year: selectedYear,
+      section,
+      mode,
+    });
+  }, [ready, regionKey, bbox, customLabel, selectedYear, section, mode]);
+
+  // ---------------------------------------------------------------- datos
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    (async () => {
       setLoadingCal(true);
-      await defer();
       const [cal, rec, a, renv] = await Promise.all([
         getBurningCalendar(bbox, excludeNonFire),
         getRecurrence(bbox, excludeNonFire),
@@ -100,20 +130,20 @@ export default function Dashboard() {
       if (cancelled) return;
       setCalendar(cal);
       setRecurrence(rec.cells);
-      setRegionEnv(renv);
       setAlpha(a.alpha);
+      setRegionEnv(renv);
       setLoadingCal(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [bbox, excludeNonFire]);
+  }, [ready, bbox, excludeNonFire]);
 
   useEffect(() => {
+    if (!ready) return;
     let cancelled = false;
     (async () => {
       setLoadingHs(true);
-      await defer();
       const res = await getHotspots(bbox, `${selectedYear}-01-01`, `${selectedYear}-12-31`, excludeNonFire);
       if (cancelled) return;
       setHotspots(res);
@@ -122,10 +152,9 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [bbox, selectedYear, excludeNonFire]);
+  }, [ready, bbox, selectedYear, excludeNonFire]);
 
   useEffect(() => {
-    // Condiciones actuales (Meteomatics vía /api/iot; respaldo simulado). Refresco cada 10 min.
     let cancelled = false;
     const load = async () => {
       const res = await fetchLiveReadings(IOT_STATIONS);
@@ -140,14 +169,14 @@ export default function Dashboard() {
   }, []);
 
   // ---------------------------------------------------------------- derivados
+  const region = regions.find((r) => r.key === regionKey) ?? null;
+  const regionLabel = region ? region.name : (customLabel ?? "Área personalizada");
   const cells = useMemo(() => calendar?.cells ?? [], [calendar]);
   const baseline = useMemo(() => monthlyBaseline(cells, mode), [cells, mode]);
   const baselineH = useMemo(() => monthlyBaseline(cells, "harmonized"), [cells]);
   const yearCells = useMemo(() => cells.filter((c) => c.year === selectedYear), [cells, selectedYear]);
+  const hasAnyData = cells.some((c) => c.active_cells > 0);
 
-  const regionLabel = regionKey === "CUSTOM" ? "Área personalizada" : REGIONS[regionKey].name;
-
-  /** Mes de escenario: el pico armonizado del año; si no hubo actividad, el mes de mayor mediana histórica. */
   const scenarioMonth = useMemo(() => {
     let best = 0;
     let month = 0;
@@ -163,12 +192,8 @@ export default function Dashboard() {
   }, [yearCells, baselineH]);
   const scenarioLabel = `${MONTHS_LONG[scenarioMonth - 1]} ${selectedYear}`;
 
-  const rows = useMemo(() => hotspots?.rows ?? [], [hotspots]);
-  const vegRows = useMemo(() => rows.filter((r) => r.thermal_type === "VEGETATION"), [rows]);
-  const spread = useMemo(() => computeSpreadVectors(rows), [rows]);
-
-  // Grilla real del mes del escenario (climatología env_grid_clim) para el mapa ISF
   useEffect(() => {
+    if (!ready) return;
     let cancelled = false;
     getEnvGrid(bbox, scenarioMonth).then((g) => {
       if (!cancelled) setEnvGrid(g);
@@ -176,15 +201,18 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [bbox, scenarioMonth]);
+  }, [ready, bbox, scenarioMonth]);
 
+  const rows = useMemo(() => hotspots?.rows ?? [], [hotspots]);
+  const vegRows = useMemo(() => rows.filter((r) => r.thermal_type === "VEGETATION"), [rows]);
+  const spread = useMemo(() => computeSpreadVectors(rows), [rows]);
   const susceptibility = useMemo(
-    () =>
-      envGrid?.length
-        ? buildSusceptibilityFromGrid(envGrid, recurrence, RECURRENCE_CELL_DEG)
-        : buildSusceptibilityGrid(bbox, selectedYear, scenarioMonth, recurrence, RECURRENCE_CELL_DEG),
-    [envGrid, bbox, selectedYear, scenarioMonth, recurrence],
+    () => buildSusceptibilityFromGrid(envGrid, recurrence, RECURRENCE_CELL_DEG),
+    [envGrid, recurrence],
   );
+  const isfLabel = susceptibility.length
+    ? `Climatología real de ${MONTHS_LONG[scenarioMonth - 1].toLowerCase()} · celdas de 0,05°`
+    : "Sin climatología para esta área";
 
   const iot = useMemo(() => {
     if (!live) return [];
@@ -196,19 +224,17 @@ export default function Dashboard() {
   }, [live, bbox]);
 
   /**
-   * Condiciones físicas del escenario. Prioridad de fuentes:
-   *  1) celdas con focos del mes pico (valores reales por celda-día);
-   *  2) sin focos ese mes: promedios reales de la región para ese año-mes (region_month_env)
-   *     + pendiente de la grilla real 0.05° (env_grid_clim);
-   *  3) focos de otros meses del año;  4) modelo paramétrico (solo sin base de datos).
+   * Condiciones del escenario (todas reales). Prioridad: celdas con focos del mes pico →
+   * promedio regional del año-mes + pendiente de la grilla → focos de otros meses del año.
+   * Sin ninguno de esos datos no se evalúa (null).
    */
   const conditions: AreaConditions | null = useMemo(() => {
     if (!calendar) return null;
     type S = { slope: number; ndvi: number; soil: number; wind: number; wdir: number };
     const monthRows = vegRows.filter((r) => Number(r.acq_date.slice(5, 7)) === scenarioMonth);
     const regionRows = regionEnv.filter((r) => r.year === selectedYear && r.month === scenarioMonth);
-    const fromRows = (rows: typeof vegRows): S[] =>
-      rows.map((r) => ({
+    const fromRows = (rs: typeof vegRows): S[] =>
+      rs.map((r) => ({
         slope: r.slope_deg ?? 0,
         ndvi: r.ndvi_pre_fire ?? 0,
         soil: r.soil_moisture_pct ?? 0,
@@ -216,12 +242,12 @@ export default function Dashboard() {
         wdir: r.wind_direction_deg ?? 0,
       }));
     let sample: S[] = [];
-    let basis: AreaConditions["basis"] = "model";
+    let basis: AreaConditions["basis"];
     if (monthRows.length) {
       sample = fromRows(monthRows);
       basis = "fire-cells";
-    } else if (regionRows.length && envGrid?.length) {
-      const avg = (k: keyof (typeof regionRows)[number]) => {
+    } else if (regionRows.length && envGrid.length) {
+      const avg = (k: keyof RegionMonthEnv) => {
         const v = regionRows.map((r) => r[k]).filter((x): x is number => typeof x === "number");
         return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
       };
@@ -237,28 +263,15 @@ export default function Dashboard() {
       sample = fromRows(vegRows);
       basis = "fire-cells-year";
     } else {
-      const [minLon, minLat, maxLon, maxLat] = bbox;
-      for (let i = 0; i < 6; i++)
-        for (let j = 0; j < 6; j++) {
-          const e = envFor(
-            minLat + ((i + 0.5) * (maxLat - minLat)) / 6,
-            minLon + ((j + 0.5) * (maxLon - minLon)) / 6,
-            selectedYear,
-            scenarioMonth,
-          );
-          sample.push({ slope: e.slope_deg, ndvi: e.ndvi_pre_fire, soil: e.soil_moisture_pct, wind: e.wind_speed_kmh, wdir: e.wind_direction_deg });
-        }
+      return null;
     }
-    const mean = (k: keyof S) => sample.reduce((acc, x) => acc + x[k], 0) / Math.max(sample.length, 1);
+    const mean = (k: keyof S) => sample.reduce((acc, x) => acc + x[k], 0) / sample.length;
     const sin = sample.reduce((acc, x) => acc + Math.sin((x.wdir * Math.PI) / 180), 0);
     const cos = sample.reduce((acc, x) => acc + Math.cos((x.wdir * Math.PI) / 180), 0);
     const cell = yearCells.find((c) => c.month === scenarioMonth);
     const b = baselineH[scenarioMonth - 1];
     const events = cell?.harmonized_events ?? 0;
     const wind = mean("wind");
-
-    // Ráfagas: viento máximo diario real (POWER WS10M_MAX) en los días con foco → P90;
-    // si no hay, máximo mensual regional; último recurso: estimación viento medio × 1,45.
     const maxes = monthRows.map((r) => r.wind_max_kmh).filter((x): x is number => typeof x === "number");
     const regionMax = regionRows.map((r) => r.wind_max_kmh).filter((x): x is number => typeof x === "number");
     let gustKmh = wind * 1.45;
@@ -270,7 +283,6 @@ export default function Dashboard() {
       gustKmh = regionMax.reduce((x, y) => x + y, 0) / regionMax.length;
       gustSource = "POWER viento máx. del mes (región)";
     }
-    const real = calendar.source === "supabase";
     return {
       regionLabel,
       year: selectedYear,
@@ -280,10 +292,10 @@ export default function Dashboard() {
       p90: b?.p90 ?? 0,
       anomalyPct: anomalyPct(events, b?.p50 ?? 0),
       meanSlope: mean("slope"),
-      steepShare: sample.filter((x) => x.slope > THRESHOLDS.steepSlopeDeg).length / Math.max(sample.length, 1),
+      steepShare: sample.filter((x) => x.slope > THRESHOLDS.steepSlopeDeg).length / sample.length,
       meanNdvi: mean("ndvi"),
       soilMoisture: mean("soil"),
-      soilSource: real && basis !== "model" ? "GLDAS/SMAP" : "modelo paramétrico",
+      soilSource: "GLDAS/SMAP",
       gustKmh,
       gustSource,
       cloudCover: cell?.avg_cloud_cover ?? 0,
@@ -291,7 +303,7 @@ export default function Dashboard() {
       windKmh: wind,
       basis,
     };
-  }, [calendar, vegRows, regionEnv, envGrid, scenarioMonth, yearCells, baselineH, bbox, selectedYear, regionLabel]);
+  }, [calendar, vegRows, regionEnv, envGrid, scenarioMonth, yearCells, baselineH, selectedYear, regionLabel]);
 
   const windOverlay: WindOverlay | null = useMemo(() => {
     if (!conditions) return null;
@@ -300,9 +312,8 @@ export default function Dashboard() {
       (best, r) => ((r.max_frp ?? 0) > (best?.max_frp ?? -1) ? r : best),
       null,
     );
-    const origin: [number, number] = top ? [top.lat, top.lon] : bboxCenter(bbox);
     return {
-      origin,
+      origin: top ? [top.lat, top.lon] : bboxCenter(bbox),
       fromDeg: conditions.windDirDeg,
       speedKmh: conditions.windKmh,
       source: `NASA POWER · ${scenarioLabel}`,
@@ -325,16 +336,30 @@ export default function Dashboard() {
   }, [yearCells, baselineH]);
 
   const bearing = dominantBearing(spread);
+  const regionNames = regions.map((r) => r.name).join(", ");
+  const emptyMessage =
+    !loadingCal && calendar && !hasAnyData
+      ? `No hay focos procesados en esta área. Por ahora los datos cubren: ${regionNames}.`
+      : !loadingCal && calendar && !conditions
+        ? `Sin focos ni datos ambientales para ${selectedYear} en esta área.`
+        : null;
 
   // ---------------------------------------------------------------- acciones
-  const selectRegion = useCallback((key: StudyRegion) => {
-    setRegionKey(key);
-    setBbox(REGIONS[key].bbox);
-  }, []);
+  const selectRegion = useCallback(
+    (key: string) => {
+      const r = regions.find((x) => x.key === key);
+      if (!r) return;
+      setRegionKey(key);
+      setBbox(r.bbox);
+      setCustomLabel(null);
+    },
+    [regions],
+  );
 
-  const customBBox = useCallback((b: BBox) => {
-    setRegionKey("CUSTOM");
+  const customArea = useCallback((b: BBox, label?: string) => {
+    setRegionKey(CUSTOM_REGION);
     setBbox(b);
+    setCustomLabel(label ?? null);
   }, []);
 
   const exportCsv = useCallback(
@@ -342,161 +367,141 @@ export default function Dashboard() {
       setExporting(true);
       try {
         const res = await getHotspots(bbox, `${startYear}-01-01`, `${endYear}-12-31`, excludeNonFire);
-        const name = regionKey === "CUSTOM" ? "area" : regionKey.toLowerCase();
+        const name = (region?.key ?? "area").toLowerCase();
         downloadText(`pyrosync_${name}_${startYear}-${endYear}.csv`, hotspotsToCsv(res.rows));
         setNotice(
           `${res.rows.length.toLocaleString("es-AR")} celdas-día exportadas` +
-            (res.truncated ? " (límite de 10.000 filas alcanzado; acotá el rango de años)." : ".") +
-            (res.source === "mock" ? " Datos mock sintéticos." : ""),
+            (res.truncated ? " (límite de 10.000 filas; acotá el rango de años)." : "."),
         );
       } finally {
         setExporting(false);
       }
     },
-    [bbox, excludeNonFire, regionKey],
+    [bbox, excludeNonFire, region],
   );
 
   const warning = calendar?.warning ?? hotspots?.warning;
-  const noData = !loadingCal && calendar && cells.every((c) => c.active_cells === 0);
-  const calibrationNote =
-    calendar?.source === "supabase"
-      ? "Calibrado en Córdoba nov-2012 a 2024 (ETL)"
-      : "Calibrado en Córdoba 2012–2024 · datos mock";
 
   return (
-    <>
-      <HeaderBar
+    <div className="flex h-dvh flex-col overflow-hidden bg-slate-950">
+      <TopBar
+        regions={regions}
         regionKey={regionKey}
+        regionLabel={regionLabel}
         bbox={bbox}
+        year={selectedYear}
         dataSource={calendar?.source ?? null}
-        alpha={alpha}
-        selectedYear={selectedYear}
-        exporting={exporting}
         onSelectRegion={selectRegion}
-        onCustomBBox={customBBox}
-        onExport={exportCsv}
+        onCustomArea={customArea}
+        onYear={setSelectedYear}
         onOpenMethodology={() => setMethodologyOpen(true)}
       />
 
-      <main className="mx-auto max-w-[1600px] space-y-4 px-4 py-4">
-        {(warning || notice || noData) && (
-          <div className="space-y-2">
-            {warning && (
-              <p className="flex items-center gap-2 rounded-lg border border-amber-800/60 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                <AlertCircle className="h-4 w-4 shrink-0" aria-hidden /> {warning}
-              </p>
-            )}
-            {noData && (
-              <p className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
-                <Info className="h-4 w-4 shrink-0" aria-hidden /> Sin focos en {formatBBox(bbox)}.
-                {calendar?.source === "mock" && " Los datos mock cubren solo Patagonia Andina y Sierras de Córdoba."}
-              </p>
-            )}
-            {notice && (
-              <p className="flex items-center justify-between gap-2 rounded-lg border border-emerald-800/60 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-                <span>{notice}</span>
-                <button type="button" className="text-emerald-300 hover:text-white" onClick={() => setNotice(null)}>
-                  Cerrar
-                </button>
-              </p>
-            )}
-          </div>
-        )}
-
-        <div className="grid gap-4 lg:grid-cols-12">
-          <div className="space-y-4 lg:col-span-8">
-            <div className="h-[660px]">
-              <MapSelector
-                title={`${regionLabel}${regionKey !== "CUSTOM" ? ` — ${REGIONS[regionKey].subtitle}` : ""}`}
-                subtitle={`${formatBBox(bbox)}${
-                  bearing != null && layers.spread
-                    ? ` · avance dominante hacia ${compassLabel(bearing)} (${bearing.toFixed(0)}°) en ${spread.length} eventos`
-                    : ""
-                }`}
-                scenarioLabel={`Escenario: ${scenarioLabel}`}
-                bbox={bbox}
-                hotspots={rows}
-                spread={spread}
-                susceptibility={susceptibility}
-                iot={iot}
-                wind={windOverlay}
-                layers={layers}
-                onToggleLayer={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
-                isfLabel={
-                susceptibility[0]?.source === "real"
-                  ? `ISF · climatología real de ${MONTHS_LONG[scenarioMonth - 1].toLowerCase()} (0,05°)`
-                  : "ISF · modelo paramétrico"
-              }
-              hotspotCount={rows.length}
-                truncated={hotspots?.truncated ?? false}
-                loading={loadingHs}
-                yearControl={
-                  <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                    Año
-                    <select
-                      value={selectedYear}
-                      onChange={(e) => setSelectedYear(+e.target.value)}
-                      className="rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 font-mono text-[11px] text-slate-100"
-                    >
-                      {YEARS.map((y) => (
-                        <option key={y} value={y}>
-                          {y}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                }
-              />
-            </div>
-            <BurnCalendar
-              cells={cells}
-              mode={mode}
-              onModeChange={setMode}
-              palette={palette}
-              onPaletteChange={setPalette}
-              excludeNonFire={excludeNonFire}
-              onExcludeNonFireChange={setExcludeNonFire}
-              selectedYear={selectedYear}
-              onSelectYear={setSelectedYear}
-              alpha={alpha}
-              loading={loadingCal}
-            />
-          </div>
-          <div className="space-y-4 lg:col-span-4">
-            <KpiCards
-              selectedYear={selectedYear}
-              total={kpi.total}
-              rawTotal={kpi.rawTotal}
-              peakMonthLabel={kpi.peakMonthLabel}
-              peakValue={kpi.peakValue}
-              anomaly={kpi.anomaly}
-              alpha={alpha}
-              calibrationNote={calibrationNote}
-            />
-            <PreventionCharterPanel conditions={conditions} scenarioLabel={scenarioLabel} iot={iot} liveNote={live?.note} />
-            <AnomalyChart
-              yearCells={yearCells}
-              baseline={baseline}
-              mode={mode}
-              selectedYear={selectedYear}
-              regionLabel={regionLabel}
-            />
-          </div>
+      {(warning || notice) && (
+        <div className="z-[1080] border-b border-slate-800 bg-slate-900 px-3 py-1.5">
+          {warning && (
+            <p className="flex items-center gap-2 text-xs text-sky-200">
+              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden /> {warning}
+            </p>
+          )}
+          {notice && (
+            <p className="flex items-center justify-between gap-2 text-xs text-emerald-200">
+              <span>{notice}</span>
+              <button type="button" onClick={() => setNotice(null)} aria-label="Cerrar aviso" className="text-emerald-300 hover:text-white">
+                <X className="h-4 w-4" />
+              </button>
+            </p>
+          )}
         </div>
+      )}
 
-        <footer className="pb-6 pt-2 text-center text-[11px] text-slate-500">
-          PyroSync · NASA Space Apps Challenge 2026 · Datos: NASA FIRMS (MODIS C6.1 + VIIRS 375 m) · Calibración α en
-          Sierras de Córdoba transferida a Patagonia Andina · Variables ambientales:{" "}
-          {calendar?.source === "supabase"
-            ? "SRTM, GLDAS-2.1/SMAP, MODIS NDVI y nubes, NASA POWER"
-            : "modelo paramétrico (sin base de datos)"}{" "}
-          · Totales anuales:{" "}
-          {cells.length
-            ? `${Math.round(cells.reduce((s, c) => s + cellValue(c, mode), 0)).toLocaleString("es-AR")}`
-            : "—"}{" "}
-          ({mode === "harmonized" ? "armonizados" : "crudos"}, 2000–2026)
-        </footer>
-      </main>
+      <div className="relative flex min-h-0 flex-1">
+        <Sidebar section={section} onSection={setSection} mobileOpen={mobileOpen} onMobileOpen={setMobileOpen}>
+          {section === "resumen" && (
+            <SummaryPanel
+              regionLabel={regionLabel}
+              scenarioLabel={scenarioLabel}
+              conditions={conditions}
+              kpi={kpi}
+              selectedYear={selectedYear}
+              alpha={alpha}
+              calibrationNote="Calibrado en Córdoba nov-2012 a 2024"
+              iot={iot}
+              liveSource={live?.source ?? null}
+              liveNote={live?.note}
+              emptyMessage={emptyMessage}
+              onGo={setSection}
+            />
+          )}
+          {section === "riesgo" && (
+            <RiskPanel
+              susceptibility={susceptibility}
+              isfLabel={isfLabel}
+              showOnMap={layers.susceptibility}
+              onToggleMap={() => setLayers((l) => ({ ...l, susceptibility: !l.susceptibility }))}
+              conditions={conditions}
+              iot={iot}
+              liveSource={live?.source ?? null}
+              liveNote={live?.note}
+            />
+          )}
+          {section === "calendario" && (
+            <div className="space-y-4">
+              <BurnCalendar
+                cells={cells}
+                mode={mode}
+                onModeChange={setMode}
+                palette={palette}
+                onPaletteChange={setPalette}
+                excludeNonFire={excludeNonFire}
+                onExcludeNonFireChange={setExcludeNonFire}
+                selectedYear={selectedYear}
+                onSelectYear={setSelectedYear}
+                alpha={alpha}
+                loading={loadingCal}
+              />
+              <AnomalyChart yearCells={yearCells} baseline={baseline} mode={mode} selectedYear={selectedYear} regionLabel={regionLabel} />
+            </div>
+          )}
+          {section === "charter" && <CharterPanel conditions={conditions} scenarioLabel={scenarioLabel} emptyMessage={emptyMessage} />}
+          {section === "datos" && (
+            <DataPanel
+              bbox={bbox}
+              year={selectedYear}
+              exporting={exporting}
+              onExport={exportCsv}
+              alpha={alpha}
+              dataSource={calendar?.source ?? null}
+              liveSource={live?.source ?? null}
+              hasGrid={susceptibility.length > 0}
+              onOpenMethodology={() => setMethodologyOpen(true)}
+            />
+          )}
+        </Sidebar>
+
+        <main className="relative min-w-0 flex-1 pb-[7.5rem] lg:pb-0">
+          <MapSelector
+            headline={region?.subtitle ? `${regionLabel} — ${region.subtitle}` : regionLabel}
+            scenarioLabel={`Escenario: ${scenarioLabel}`}
+            spreadSummary={
+              bearing != null ? `Avance dominante hacia ${compassLabel(bearing)} (${bearing.toFixed(0)}°) en ${spread.length} eventos` : undefined
+            }
+            bbox={bbox}
+            hotspots={rows}
+            spread={spread}
+            susceptibility={susceptibility}
+            iot={iot}
+            wind={windOverlay}
+            layers={layers}
+            onToggleLayer={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
+            hotspotCount={rows.length}
+            truncated={hotspots?.truncated ?? false}
+            loading={loadingHs}
+            isfLabel={isfLabel}
+            emptyMessage={emptyMessage}
+          />
+        </main>
+      </div>
 
       <MethodologyModal
         open={methodologyOpen}
@@ -505,6 +510,6 @@ export default function Dashboard() {
         dataSource={calendar?.source ?? null}
         liveSource={live?.source ?? null}
       />
-    </>
+    </div>
   );
 }

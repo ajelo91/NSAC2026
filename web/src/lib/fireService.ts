@@ -1,9 +1,8 @@
 /**
- * Acceso a datos de PyroSync.
- *  - Con NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY: RPCs de PostGIS
- *    (get_burning_calendar_env, get_hotspots_env, get_cell_recurrence — etl/sql/002_*.sql).
- *  - Sin variables o ante un error de red/RPC: datos mock en memoria (lib/mockData.ts),
- *    generados con el mismo pipeline de METHODOLOGY.md.
+ * Acceso a datos de PyroSync — siempre datos REALES.
+ *  1) Supabase (RPCs PostGIS y tablas: harmonized_hotspots, region_month_env, env_grid_clim, regions).
+ *  2) Si no hay variables de Supabase o la base no responde: copia estática de los mismos datos
+ *     (web/public/data, etl/export_web_snapshot.py). No hay datos sintéticos en la app.
  */
 import type {
   BBox,
@@ -14,12 +13,11 @@ import type {
   HotspotRecord,
   HotspotsResult,
   RecurrenceCell,
+  Region,
   RegionMonthEnv,
-  StudyRegion,
 } from "@/types/fire";
-import { regionalCloud } from "./envModel";
-import { getMockDataset } from "./mockData";
-import { bboxCenter, bboxIntersects, hasCoverage, inBBox, REGIONS, YEARS } from "./regions";
+import { bboxIntersects, FALLBACK_REGIONS, hasCoverage, inBBox, YEARS } from "./regions";
+import { loadSnapshot } from "./snapshot";
 import { getSupabase, isSupabaseConfigured } from "./supabase";
 
 export { isSupabaseConfigured };
@@ -27,56 +25,75 @@ export { isSupabaseConfigured };
 const RPC_TIMEOUT_MS = 15_000;
 export const MAX_EXPORT_ROWS = 10_000;
 export const RECURRENCE_CELL_DEG = 0.05;
+const PAGE = 1000; // la API de Supabase devuelve como máximo 1000 filas por pedido
+
+function withTimeout<T>(p: PromiseLike<T>, label: string): Promise<T> {
+  return Promise.race([
+    Promise.resolve(p),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label}: timeout`)), RPC_TIMEOUT_MS)),
+  ]);
+}
 
 async function rpc<T>(name: string, params: Record<string, unknown>): Promise<T> {
   const sb = getSupabase();
   if (!sb) throw new Error("Supabase no configurado");
-  const call = sb.rpc(name, params).then(({ data, error }) => {
-    if (error) throw new Error(`${name}: ${error.message}`);
-    return data as T;
-  });
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`${name}: timeout`)), RPC_TIMEOUT_MS),
-  );
-  return Promise.race([call, timeout]);
+  const { data, error } = await withTimeout(sb.rpc(name, params), name);
+  if (error) throw new Error(`${name}: ${error.message}`);
+  return data as T;
 }
 
-/** La API de Supabase devuelve como máximo 1000 filas por pedido: paginar con .range(). */
-const PAGE = 1000;
-async function rpcAll<T>(name: string, params: Record<string, unknown>, maxRows = 10_000): Promise<T[]> {
+async function rpcAll<T>(name: string, params: Record<string, unknown>, maxRows = MAX_EXPORT_ROWS): Promise<T[]> {
   const sb = getSupabase();
   if (!sb) throw new Error("Supabase no configurado");
   const out: T[] = [];
   for (let from = 0; from < maxRows; from += PAGE) {
     const to = Math.min(from + PAGE, maxRows) - 1;
-    const call = sb
-      .rpc(name, params)
-      .range(from, to)
-      .then(({ data, error }) => {
-        if (error) throw new Error(`${name}: ${error.message}`);
-        return (data ?? []) as T[];
-      });
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`${name}: timeout`)), RPC_TIMEOUT_MS),
-    );
-    const page = await Promise.race([call, timeout]);
+    const { data, error } = await withTimeout(sb.rpc(name, params).range(from, to), name);
+    if (error) throw new Error(`${name}: ${error.message}`);
+    const page = (data ?? []) as T[];
     out.push(...page);
     if (page.length < to - from + 1) break;
   }
   return out;
 }
 
-/** Regiones de estudio que se superponen con el bbox (para las tablas por región). */
-function regionsIn(bbox: BBox): StudyRegion[] {
-  return (Object.keys(REGIONS) as StudyRegion[]).filter((k) => bboxIntersects(REGIONS[k].bbox, bbox));
+const bboxParams = (b: BBox) => ({ min_lon: b[0], min_lat: b[1], max_lon: b[2], max_lat: b[3] });
+const fallbackNote = (err: unknown) =>
+  `Base de datos no disponible (${(err as Error).message}); se muestra la copia estática de los datos reales.`;
+
+// ---------------------------------------------------------------------------
+// Regiones (catálogo)
+// ---------------------------------------------------------------------------
+let knownRegions: Region[] = FALLBACK_REGIONS;
+
+export async function getRegions(): Promise<{ regions: Region[]; source: DataSource }> {
+  const sb = getSupabase();
+  if (!sb) return { regions: FALLBACK_REGIONS, source: "snapshot" };
+  try {
+    const { data, error } = await withTimeout(
+      sb.from("regions").select("*").eq("active", true).order("sort_order"),
+      "regions",
+    );
+    if (error || !data?.length) throw error ?? new Error("sin regiones");
+    knownRegions = data.map((r) => ({
+      key: r.key,
+      name: r.name,
+      subtitle: r.subtitle,
+      role: r.role,
+      country: r.country,
+      bbox: [r.min_lon, r.min_lat, r.max_lon, r.max_lat] as BBox,
+      isCalibration: r.is_calibration,
+      calibrationRegion: r.calibration_region,
+      defaultYear: r.default_year,
+    }));
+    return { regions: knownRegions, source: "supabase" };
+  } catch {
+    return { regions: FALLBACK_REGIONS, source: "snapshot" };
+  }
 }
 
-const bboxParams = (b: BBox) => ({ min_lon: b[0], min_lat: b[1], max_lon: b[2], max_lat: b[3] });
-
-function mockRowsIn(bbox: BBox, excludeNonFire: boolean): HotspotRecord[] {
-  return getMockDataset().rows.filter(
-    (r) => inBBox(r.lat, r.lon, bbox) && (!excludeNonFire || r.thermal_type === "VEGETATION"),
-  );
+function regionsIn(bbox: BBox): string[] {
+  return knownRegions.filter((r) => bboxIntersects(r.bbox, bbox)).map((r) => r.key);
 }
 
 // ---------------------------------------------------------------------------
@@ -84,11 +101,8 @@ function mockRowsIn(bbox: BBox, excludeNonFire: boolean): HotspotRecord[] {
 // ---------------------------------------------------------------------------
 type PartialCell = Omit<CalendarCell, "has_coverage" | "cloud_from_model" | "cloud_origin">;
 
-/**
- * Completa la matriz 2000–2026 × 12. La nubosidad de meses sin focos sale del promedio regional
- * real (region_month_env, MODIS) si está disponible; si no, de la climatología paramétrica.
- */
-function completeCalendar(partial: PartialCell[], bbox: BBox, regionEnv: RegionMonthEnv[] = []): CalendarCell[] {
+/** Matriz 2000–2026 × 12. Meses sin focos: nubosidad del promedio regional real (MODIS) o sin dato. */
+function completeCalendar(partial: PartialCell[], regionEnv: RegionMonthEnv[]): CalendarCell[] {
   const byKey = new Map(partial.map((c) => [`${c.year}-${c.month}`, c]));
   const regCloud = new Map<string, number[]>();
   for (const r of regionEnv) {
@@ -96,7 +110,6 @@ function completeCalendar(partial: PartialCell[], bbox: BBox, regionEnv: RegionM
     const k = `${r.year}-${r.month}`;
     regCloud.set(k, [...(regCloud.get(k) ?? []), r.cloud_cover_pct]);
   }
-  const [clat, clon] = bboxCenter(bbox);
   const cells: CalendarCell[] = [];
   for (const year of YEARS) {
     for (let month = 1; month <= 12; month++) {
@@ -109,9 +122,6 @@ function completeCalendar(partial: PartialCell[], bbox: BBox, regionEnv: RegionM
       if (cloud == null && cov && reg?.length) {
         cloud = reg.reduce((a, b) => a + b, 0) / reg.length;
         origin = "region";
-      } else if (cloud == null && cov && regionEnv.length === 0) {
-        cloud = regionalCloud(clat, clon, year, month);
-        origin = "model";
       }
       cells.push({
         year,
@@ -186,77 +196,94 @@ function aggregateCalendar(rows: HotspotRecord[]): PartialCell[] {
   });
 }
 
-function mockCalendar(bbox: BBox, excludeNonFire: boolean, warning?: string): CalendarResult {
-  return {
-    cells: completeCalendar(aggregateCalendar(mockRowsIn(bbox, excludeNonFire)), bbox),
-    source: "mock",
-    warning,
-  };
+async function snapshotRowsIn(bbox: BBox, excludeNonFire: boolean): Promise<HotspotRecord[]> {
+  const s = await loadSnapshot();
+  return s.hotspots.filter(
+    (r) => inBBox(r.lat, r.lon, bbox) && (!excludeNonFire || r.thermal_type === "VEGETATION"),
+  );
+}
+
+async function snapshotCalendar(bbox: BBox, excludeNonFire: boolean, warning?: string): Promise<CalendarResult> {
+  const [rows, env] = await Promise.all([snapshotRowsIn(bbox, excludeNonFire), getRegionMonthEnv(bbox, true)]);
+  return { cells: completeCalendar(aggregateCalendar(rows), env), source: "snapshot", warning };
 }
 
 export async function getBurningCalendar(bbox: BBox, excludeNonFire: boolean): Promise<CalendarResult> {
-  if (!isSupabaseConfigured()) return mockCalendar(bbox, excludeNonFire);
+  if (!isSupabaseConfigured()) return snapshotCalendar(bbox, excludeNonFire);
   try {
     const [data, regionEnv] = await Promise.all([
       rpc<PartialCell[]>("get_burning_calendar_env", { ...bboxParams(bbox), exclude_non_fire: excludeNonFire }),
       getRegionMonthEnv(bbox),
     ]);
-    return { cells: completeCalendar(data ?? [], bbox, regionEnv), source: "supabase" };
+    return { cells: completeCalendar(data ?? [], regionEnv), source: "supabase" };
   } catch (err) {
-    return mockCalendar(bbox, excludeNonFire, `Supabase no disponible (${(err as Error).message}); usando datos mock.`);
+    return snapshotCalendar(bbox, excludeNonFire, fallbackNote(err));
   }
 }
 
-/** Promedios reales región × año × mes (tabla region_month_env). [] sin base o si la tabla no existe. */
-export async function getRegionMonthEnv(bbox: BBox): Promise<RegionMonthEnv[]> {
-  const sb = getSupabase();
+// ---------------------------------------------------------------------------
+// Variables ambientales reales
+// ---------------------------------------------------------------------------
+/** Promedios reales región × año × mes. [] si el área no toca ninguna región con datos. */
+export async function getRegionMonthEnv(bbox: BBox, forceSnapshot = false): Promise<RegionMonthEnv[]> {
   const regions = regionsIn(bbox);
-  if (!sb || !regions.length) return [];
-  try {
-    const out: RegionMonthEnv[] = [];
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await sb
-        .from("region_month_env")
-        .select("*")
-        .in("region", regions)
-        .order("region")
-        .order("year")
-        .order("month")
-        .range(from, from + PAGE - 1);
-      if (error) throw error;
-      out.push(...((data ?? []) as RegionMonthEnv[]));
-      if (!data || data.length < PAGE) break;
+  if (!regions.length) return [];
+  const sb = forceSnapshot ? null : getSupabase();
+  if (sb) {
+    try {
+      const out: RegionMonthEnv[] = [];
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await withTimeout(
+          sb.from("region_month_env").select("*").in("region", regions)
+            .order("region").order("year").order("month").range(from, from + PAGE - 1),
+          "region_month_env",
+        );
+        if (error) throw error;
+        out.push(...((data ?? []) as RegionMonthEnv[]));
+        if (!data || data.length < PAGE) break;
+      }
+      return out;
+    } catch {
+      /* respaldo abajo */
     }
-    return out;
+  }
+  try {
+    const s = await loadSnapshot();
+    return s.regionEnv.filter((r) => regions.includes(r.region));
   } catch {
     return [];
   }
 }
 
-/** Climatología real del mes en celdas de 0.05° (tabla env_grid_clim). null si no hay datos reales. */
-export async function getEnvGrid(bbox: BBox, month: number): Promise<EnvGridCell[] | null> {
+/** Climatología real del mes en celdas de 0,05° (env_grid_clim). [] si no hay datos para el área. */
+export async function getEnvGrid(bbox: BBox, month: number): Promise<EnvGridCell[]> {
+  if (!regionsIn(bbox).length) return [];
+  const inside = (g: EnvGridCell) => g.month === month && inBBox(g.lat, g.lon, bbox);
   const sb = getSupabase();
-  if (!sb || !regionsIn(bbox).length) return null;
-  try {
-    const out: EnvGridCell[] = [];
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await sb
-        .from("env_grid_clim")
-        .select("*")
-        .eq("month", month)
-        .gte("lat", bbox[1])
-        .lte("lat", bbox[3])
-        .gte("lon", bbox[0])
-        .lte("lon", bbox[2])
-        .order("cell_id")
-        .range(from, from + PAGE - 1);
-      if (error) throw error;
-      out.push(...((data ?? []) as EnvGridCell[]));
-      if (!data || data.length < PAGE) break;
+  if (sb) {
+    try {
+      const out: EnvGridCell[] = [];
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await withTimeout(
+          sb.from("env_grid_clim").select("*").eq("month", month)
+            .gte("lat", bbox[1]).lte("lat", bbox[3]).gte("lon", bbox[0]).lte("lon", bbox[2])
+            .order("cell_id").range(from, from + PAGE - 1),
+          "env_grid_clim",
+        );
+        if (error) throw error;
+        out.push(...((data ?? []) as EnvGridCell[]));
+        if (!data || data.length < PAGE) break;
+      }
+      if (out.length) return out;
+    } catch {
+      /* respaldo abajo */
     }
-    return out.length ? out : null;
+  }
+  try {
+    const s = await loadSnapshot();
+    return s.grid.filter(inside);
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -270,33 +297,33 @@ export async function getHotspots(
   excludeNonFire: boolean,
   maxRows = MAX_EXPORT_ROWS,
 ): Promise<HotspotsResult> {
-  const mock = (warning?: string): HotspotsResult => {
-    const all = mockRowsIn(bbox, excludeNonFire)
+  const snapshot = async (warning?: string): Promise<HotspotsResult> => {
+    const all = (await snapshotRowsIn(bbox, excludeNonFire))
       .filter((r) => r.acq_date >= startDate && r.acq_date <= endDate)
       .reverse();
-    return { rows: all.slice(0, maxRows), truncated: all.length > maxRows, source: "mock", warning };
+    return { rows: all.slice(0, maxRows), truncated: all.length > maxRows, source: "snapshot", warning };
   };
-  if (!isSupabaseConfigured()) return mock();
+  if (!isSupabaseConfigured()) return snapshot();
   try {
     const rows = await rpcAll<HotspotRecord>(
       "get_hotspots_env",
       { ...bboxParams(bbox), start_date: startDate, end_date: endDate, exclude_non_fire: excludeNonFire, max_rows: maxRows },
       maxRows,
     );
-    return { rows: rows ?? [], truncated: (rows?.length ?? 0) >= maxRows, source: "supabase" };
+    return { rows, truncated: rows.length >= maxRows, source: "supabase" };
   } catch (err) {
-    return mock(`Supabase no disponible (${(err as Error).message}); usando datos mock.`);
+    return snapshot(fallbackNote(err));
   }
 }
 
-/** Recurrencia histórica (celdas-día activas 2000–2026) en una grilla gruesa de 0.05°. */
+/** Recurrencia histórica (celdas-día activas 2000–2026) en una grilla de 0,05°. */
 export async function getRecurrence(
   bbox: BBox,
   excludeNonFire: boolean,
 ): Promise<{ cells: RecurrenceCell[]; source: DataSource }> {
-  const mock = () => {
+  const snapshot = async () => {
     const acc = new Map<string, RecurrenceCell>();
-    for (const r of mockRowsIn(bbox, excludeNonFire)) {
+    for (const r of await snapshotRowsIn(bbox, excludeNonFire)) {
       const lat_idx = Math.floor(r.lat / RECURRENCE_CELL_DEG);
       const lon_idx = Math.floor(r.lon / RECURRENCE_CELL_DEG);
       const k = `${lat_idx}_${lon_idx}`;
@@ -304,36 +331,41 @@ export async function getRecurrence(
       c.cell_days++;
       acc.set(k, c);
     }
-    return { cells: [...acc.values()], source: "mock" as const };
+    return { cells: [...acc.values()], source: "snapshot" as const };
   };
-  if (!isSupabaseConfigured()) return mock();
+  if (!isSupabaseConfigured()) return snapshot();
   try {
     const cells = await rpcAll<RecurrenceCell>(
       "get_cell_recurrence",
       { ...bboxParams(bbox), cell_size: RECURRENCE_CELL_DEG, exclude_non_fire: excludeNonFire },
       50_000,
     );
-    return { cells: cells ?? [], source: "supabase" };
+    return { cells, source: "supabase" };
   } catch {
-    return mock();
+    return snapshot();
   }
 }
 
-/** α de calibración (Córdoba 2012–2024): en la base, es el peso de cualquier celda-día solo-VIIRS. */
+/** α de calibración (Córdoba): en la base es el peso de cualquier celda-día solo-VIIRS. */
 export async function getCalibrationAlpha(): Promise<{ alpha: number | null; source: DataSource }> {
-  const mock = () => ({ alpha: getMockDataset().alpha, source: "mock" as const });
+  const snapshot = async () => {
+    try {
+      return { alpha: (await loadSnapshot()).alpha, source: "snapshot" as const };
+    } catch {
+      return { alpha: null, source: "snapshot" as const };
+    }
+  };
   const sb = getSupabase();
-  if (!sb) return mock();
+  if (!sb) return snapshot();
   try {
-    const { data, error } = await sb
-      .from("harmonized_hotspots")
-      .select("harmonized_weight")
-      .eq("sensor_source", "VIIRS")
-      .limit(1);
+    const { data, error } = await withTimeout(
+      sb.from("harmonized_hotspots").select("harmonized_weight").eq("sensor_source", "VIIRS").limit(1),
+      "alpha",
+    );
     if (error) throw error;
     return { alpha: data?.[0]?.harmonized_weight ?? null, source: "supabase" };
   } catch {
-    return mock();
+    return snapshot();
   }
 }
 

@@ -1,5 +1,18 @@
-export type RegionKey = "PATAGONIA" | "CORDOBA" | "CUSTOM";
-export type StudyRegion = "PATAGONIA" | "CORDOBA";
+/** Clave de región del catálogo (tabla regions) o "CUSTOM" para un área definida por el usuario. */
+export type RegionKey = string;
+export type StudyRegion = string;
+
+export interface Region {
+  key: string;
+  name: string;
+  subtitle: string | null;
+  role: string | null;
+  country: string;
+  bbox: BBox;
+  isCalibration: boolean;
+  calibrationRegion: string | null;
+  defaultYear: number | null;
+}
 
 /** [min_lon, min_lat, max_lon, max_lat] (EPSG:4326) */
 export type BBox = [number, number, number, number];
@@ -7,7 +20,8 @@ export type BBox = [number, number, number, number];
 export type SensorSource = "MODIS" | "VIIRS" | "BOTH";
 export type ThermalType = "VEGETATION" | "VOLCANIC_INDUSTRIAL";
 export type EnvSource = "AUX" | "PARAMETRIC" | "MIXED";
-export type DataSource = "supabase" | "mock";
+/** supabase = base en vivo · snapshot = copia estática de los mismos datos reales (respaldo) */
+export type DataSource = "supabase" | "snapshot";
 export type Palette = "viridis" | "ylorrd";
 export type SeriesMode = "harmonized" | "raw";
 
@@ -73,7 +87,7 @@ export interface CalendarCell {
   avg_frp: number | null;
   avg_cloud_cover: number | null;
   cloud_from_model: boolean; // true si la nubosidad NO viene de las celdas con focos del mes
-  cloud_origin: "cells" | "region" | "model" | null; // celdas con focos · promedio regional MODIS · modelo
+  cloud_origin: "cells" | "region" | null; // celdas con focos · promedio regional MODIS · sin dato
   avg_soil_moisture: number | null;
   avg_slope: number | null;
   avg_wind_speed: number | null;

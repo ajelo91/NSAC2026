@@ -42,7 +42,7 @@ pyrosync/
 ### 1. Base de Datos (Supabase)
 1. Crear un proyecto en [Supabase](https://supabase.com).
 2. Ejecutar el script completo de `docs/SUPABASE_SCHEMA.md` en el **SQL Editor**.
-3. Ejecutar luego `etl/sql/002_patagonia_env_extension.sql` (región, variables ambientales y RPCs de la web).
+3. Ejecutar luego, en orden, los scripts de `etl/sql/` (`002` … `005`): variables ambientales, seguridad, tablas ambientales reales y catálogo de regiones.
 
 ### 2. Pipeline ETL (Python)
 1. Descargar los archivos históricos CSV de **MODIS C6.1** y **VIIRS S-NPP** desde [NASA FIRMS Country Archive](https://firms.modaps.eosdis.nasa.gov/country/) y guardarlos en `etl/raw_data/`.
@@ -50,9 +50,11 @@ pyrosync/
 ```bash
 cd etl
 pip install -r requirements.txt
-python harmonize.py            # o: python harmonize.py --generate-sample (datos sintéticos)
-python upload_supabase.py
+python harmonize.py            # --generate-sample solo para probar el pipeline (no subir a producción)
+python upload_supabase.py --replace
+python export_web_snapshot.py  # copia de respaldo de los datos reales en web/public/data
 ```
+La web nunca genera datos: si Supabase no responde, lee la copia de `web/public/data`.
 
 ### 3. Aplicación Web (Next.js)
 ```bash

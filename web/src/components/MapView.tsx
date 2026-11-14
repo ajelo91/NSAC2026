@@ -269,7 +269,7 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
                 Estación {station.name} ({station.id})
               </strong>
               <div style={{ color: "#fbbf24", fontSize: 10, marginBottom: 4 }}>
-                {reading.source === "meteomatics" ? "Meteomatics (modelo mix)" : "SIMULADO (sin API)"} ·{" "}
+                Meteomatics (modelo mix) ·{" "}
                 {new Date(reading.timestamp).toLocaleTimeString("es-AR")}
               </div>
               <Row k="Temperatura" v={fmt(reading.temperature_c, 1, " °C")} />
@@ -279,11 +279,7 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
                 v={`${fmt(reading.wind_speed_kmh, 0, " km/h")} ${reading.wind_direction_deg != null ? compassLabel(reading.wind_direction_deg) : ""}`}
               />
               <Row k="Ráfagas (1 h)" v={fmt(reading.wind_gust_kmh, 0, " km/h")} />
-              {reading.soil_moisture_pct != null ? (
-                <Row k="Humedad de suelo" v={fmt(reading.soil_moisture_pct, 1, " %")} />
-              ) : (
-                <Row k="Índice humedad suelo" v={fmt(reading.soil_moisture_index, 2)} />
-              )}
+              <Row k="Índice humedad suelo" v={fmt(reading.soil_moisture_index, 2)} />
               <Row k="Altitud" v={`${station.elevation_m} m`} />
             </Popup>
           </Marker>

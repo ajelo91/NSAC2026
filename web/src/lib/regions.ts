@@ -1,32 +1,37 @@
-import type { BBox, StudyRegion } from "@/types/fire";
+import type { BBox, Region } from "@/types/fire";
 
-export interface RegionPreset {
-  key: StudyRegion;
-  name: string;
-  subtitle: string;
-  role: string;
-  bbox: BBox;
-}
-
-/** Bounding boxes compartidos con etl/harmonize.py (REGIONS). */
-export const REGIONS: Record<StudyRegion, RegionPreset> = {
-  PATAGONIA: {
+/**
+ * Catálogo de regiones de respaldo. La fuente principal es la tabla `regions` de Supabase
+ * (fireService.getRegions); agregar una región nueva es insertar una fila, no tocar código.
+ * Los bounding boxes coinciden con etl/harmonize.py (REGIONS).
+ */
+export const FALLBACK_REGIONS: Region[] = [
+  {
     key: "PATAGONIA",
     name: "Patagonia Andina",
     subtitle: "Comarca Andina / PN Los Alerces",
     role: "Foco operativo",
+    country: "Argentina",
     bbox: [-72.2, -43.5, -70.8, -41.5],
+    isCalibration: false,
+    calibrationRegion: "CORDOBA",
+    defaultYear: 2025,
   },
-  CORDOBA: {
+  {
     key: "CORDOBA",
     name: "Sierras de Córdoba",
-    subtitle: "Benchmark de Calibración Histórica 2000–2026",
-    role: "Calibración α (2012–2024)",
+    subtitle: "Benchmark de calibración histórica 2000–2026",
+    role: "Calibración α",
+    country: "Argentina",
     bbox: [-65.2, -32.6, -64.0, -30.8],
+    isCalibration: true,
+    calibrationRegion: null,
+    defaultYear: 2024,
   },
-};
+];
 
-export const DEFAULT_REGION: StudyRegion = "PATAGONIA";
+export const DEFAULT_REGION = "PATAGONIA";
+export const CUSTOM_REGION = "CUSTOM";
 
 export const FIRST_YEAR = 2000;
 export const LAST_YEAR = 2026;
@@ -37,7 +42,6 @@ export const COVERAGE_END = { year: 2026, month: 10 };
 
 export const BASELINE_START = 2001;
 export const BASELINE_END = 2020;
-export const CALIBRATION_WINDOW = [2012, 2024] as const;
 
 export const MONTHS_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 export const MONTHS_LONG = [
@@ -48,19 +52,6 @@ export const MONTHS_LONG = [
 export function hasCoverage(year: number, month: number): boolean {
   const v = year * 12 + month;
   return v >= COVERAGE_START.year * 12 + COVERAGE_START.month && v <= COVERAGE_END.year * 12 + COVERAGE_END.month;
-}
-
-export function regionOfPoint(lat: number, lon: number): StudyRegion | null {
-  for (const r of Object.values(REGIONS)) {
-    const [minLon, minLat, maxLon, maxLat] = r.bbox;
-    if (lon >= minLon && lon <= maxLon && lat >= minLat && lat <= maxLat) return r.key;
-  }
-  return null;
-}
-
-/** Región climática para el modelo paramétrico (fuera de las regiones de estudio se usa la más cercana en latitud). */
-export function climateRegion(lat: number, lon: number): StudyRegion {
-  return regionOfPoint(lat, lon) ?? (lat < -38 ? "PATAGONIA" : "CORDOBA");
 }
 
 export function bboxCenter(b: BBox): [number, number] {
@@ -87,7 +78,7 @@ export interface IotStation {
   elevation_m: number;
 }
 
-/** Red IoT de demostración en valles de la Comarca Andina. Lecturas SIMULADAS (ver lib/iot.ts). */
+/** Puntos de consulta meteorológica en valles de la Comarca Andina (Meteomatics). */
 export const IOT_STATIONS: IotStation[] = [
   { id: "ELB-01", name: "El Bolsón", lat: -41.964, lon: -71.535, elevation_m: 340 },
   { id: "LPU-02", name: "Lago Puelo", lat: -42.069, lon: -71.604, elevation_m: 200 },
