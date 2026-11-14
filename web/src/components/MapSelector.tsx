@@ -27,6 +27,7 @@ interface Props extends Omit<MapViewProps, "show"> {
 }
 
 const LAYER_DEFS: { key: keyof MapLayers; label: string; hint: string; Icon: typeof Flame }[] = [
+  { key: "live", label: "Focos recientes (NASA)", hint: "VIIRS NOAA-20/21 + MODIS · NRT", Icon: Radio },
   { key: "hotspots", label: "Focos armonizados", hint: "MODIS + VIIRS · celda 1 km", Icon: Flame },
   { key: "spread", label: "Avance de incendios", hint: "Dirección de cada evento", Icon: Route },
   { key: "susceptibility", label: "Riesgo (ISF)", hint: "Pendiente, suelo, viento, historia", Icon: ShieldAlert },
@@ -50,6 +51,7 @@ export default function MapSelector(props: Props) {
       <MapView
         bbox={props.bbox}
         hotspots={props.hotspots}
+        liveHotspots={props.liveHotspots}
         spread={props.spread}
         susceptibility={props.susceptibility}
         iot={props.iot}
@@ -63,7 +65,7 @@ export default function MapSelector(props: Props) {
           <p className="truncate text-sm font-semibold text-slate-100">{props.headline}</p>
           <p className="flex items-center gap-1.5 text-[11px] text-slate-400">
             {props.loading && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
-            {props.scenarioLabel} · {props.hotspotCount.toLocaleString("es-AR")} celdas-día
+            {props.scenarioLabel} · {props.hotspotCount.toLocaleString("es-AR")} celdas-día · {props.liveHotspots.length.toLocaleString("es-AR")} detecciones recientes
             {props.truncated && " (límite 10.000)"}
           </p>
           {props.spreadSummary && layers.spread && <p className="text-[11px] text-slate-500">{props.spreadSummary}</p>}
