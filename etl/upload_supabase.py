@@ -5,7 +5,8 @@ PyroSync — Carga de etl/harmonized_output.csv a Supabase (tabla harmonized_hot
 Requisitos previos:
   1. Ejecutar en el SQL Editor de Supabase el script de SUPABASE_SCHEMA.md
      (tabla, índices, trigger de geom y RPCs) y luego
-     etl/sql/002_patagonia_env_extension.sql (región + variables ambientales).
+     etl/sql/002_patagonia_env_extension.sql (región + variables ambientales)
+     y etl/sql/003_security_postgis_extensions_schema.sql (seguridad).
   2. Copiar etl/.env.example a etl/.env y completar SUPABASE_URL y
      SUPABASE_SERVICE_ROLE_KEY (la service role key saltea RLS para insertar).
 

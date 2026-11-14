@@ -43,6 +43,8 @@ export interface MapViewProps {
 }
 
 const MAX_DRAWN_HOTSPOTS = 3500;
+/** Clave pública de CARTO Basemaps (carto.com/basemaps/apikey). Sin ella se usa Esri Dark Gray. */
+const CARTO_API_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY;
 
 function FitBounds({ bbox }: { bbox: BBox }) {
   const map = useMap();
@@ -109,14 +111,23 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
     <MapContainer center={center} zoom={8} preferCanvas className="h-full w-full" scrollWheelZoom>
       <FitBounds bbox={bbox} />
       <LayersControl position="bottomleft">
-        <LayersControl.BaseLayer checked name="Oscuro (CARTO)">
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-            subdomains="abcd"
-            maxZoom={19}
-          />
-        </LayersControl.BaseLayer>
+        {CARTO_API_KEY ? (
+          <LayersControl.BaseLayer checked name="Oscuro (CARTO)">
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+              url={`https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png?key=${encodeURIComponent(CARTO_API_KEY)}`}
+              maxZoom={19}
+            />
+          </LayersControl.BaseLayer>
+        ) : (
+          <LayersControl.BaseLayer checked name="Oscuro (Esri)">
+            <TileLayer
+              attribution="Tiles &copy; Esri — Esri, HERE, Garmin, &copy; OpenStreetMap contributors"
+              url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+              maxZoom={16}
+            />
+          </LayersControl.BaseLayer>
+        )}
         <LayersControl.BaseLayer name="Relieve (OpenTopoMap)">
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, SRTM | &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)'
