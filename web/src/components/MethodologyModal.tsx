@@ -21,7 +21,7 @@ function sources(db: boolean, live: boolean): { agency: string; product: string;
   return [
     {
       agency: "NASA FIRMS",
-      product: "MODIS C6.1 (1 km) + VIIRS S-NPP 375 m",
+      product: "Histórico MODIS + VIIRS S-NPP (hasta 02-11-2026); monitoreo NRT VIIRS NOAA-20/NOAA-21 + MODIS",
       variable: "Focos activos, FRP, confianza",
       role: "Serie 2000–2026 armonizada en grilla 0.01° (Etapas 1–4)",
       status: etl,

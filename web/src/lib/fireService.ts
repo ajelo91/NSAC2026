@@ -12,6 +12,7 @@ import type {
   EnvGridCell,
   HotspotRecord,
   HotspotsResult,
+  LiveHotspot,
   RecurrenceCell,
   Region,
   RegionMonthEnv,
@@ -399,4 +400,21 @@ export function downloadText(filename: string, text: string, mime = "text/csv;ch
   a.click();
   a.remove();
   URL.revokeObjectURL(href);
+}
+
+
+/** Detecciones FIRMS recientes: tabla operacional separada del histórico armonizado. */
+export async function getLiveHotspots(bbox: BBox, hours = 72): Promise<LiveHotspot[]> {
+  const sb = getSupabase();
+  if (!sb) return [];
+  const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const { data, error } = await withTimeout(
+    sb.from("live_hotspots").select("*").gte("ingested_at", cutoff)
+      .gte("latitude", bbox[1]).lte("latitude", bbox[3])
+      .gte("longitude", bbox[0]).lte("longitude", bbox[2])
+      .order("acq_date", { ascending: false }).order("acq_time", { ascending: false }).limit(5000),
+    "live_hotspots",
+  );
+  if (error) throw new Error("live_hotspots: " + error.message);
+  return (data ?? []) as LiveHotspot[];
 }

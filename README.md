@@ -66,6 +66,12 @@ npm run dev
 
 ---
 
+## Monitoreo NRT (focos recientes)
+
+La capa operativa de focos recientes está separada del histórico armonizado. Para Argentina usa NASA FIRMS `VIIRS_NOAA20_NRT`, `VIIRS_NOAA21_NRT` y `MODIS_NRT`; S-NPP queda únicamente en el histórico hasta el 02-11-2026. Configuración, migración SQL, secretos y límites operativos: [`docs/NRT_MONITORING.md`](docs/NRT_MONITORING.md).
+
+Pasos: ejecutar `etl/sql/006_live_firms_monitoring.sql` en Supabase, cargar `NASA_FIRMS_MAP_KEY`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` como GitHub Actions Secrets y ejecutar el workflow `NASA FIRMS near-real-time ingestion` manualmente. Luego se ejecuta cada 30 minutos.
+
 ## Fuentes de Datos Oficiales
 - **NASA FIRMS (Fire Information for Resource Management System):** MODIS Collection 6.1 (MCD14ML) y VIIRS 375m (VNP14IMGTDL_NRT / Suomi-NPP Archive).
 - **Inspiración Regional:** CONAE (Comisión Nacional de Actividades Espaciales) — Casos de estudio en Delta del Paraná, Sierras de Córdoba, Patagonia Andina, Cuyo y Cuenca Neuquina.
