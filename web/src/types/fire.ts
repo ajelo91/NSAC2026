@@ -29,7 +29,37 @@ export interface HotspotRecord {
   wind_speed_kmh: number | null;
   wind_direction_deg: number | null;
   ndvi_pre_fire: number | null;
+  /** Viento máximo diario a 10 m (NASA POWER WS10M_MAX). null si no se cargó. */
+  wind_max_kmh: number | null;
   env_source: EnvSource | null;
+}
+
+/** Promedios reales sobre toda una región de estudio para un mes (tabla region_month_env). */
+export interface RegionMonthEnv {
+  region: StudyRegion;
+  year: number;
+  month: number;
+  cloud_cover_pct: number | null;
+  ndvi: number | null;
+  soil_moisture_pct: number | null;
+  wind_speed_kmh: number | null;
+  wind_direction_deg: number | null;
+  wind_max_kmh: number | null;
+}
+
+/** Climatología mensual real en celdas de 0.05° (tabla env_grid_clim). */
+export interface EnvGridCell {
+  cell_id: string;
+  month: number;
+  region: StudyRegion;
+  lat: number;
+  lon: number;
+  slope_deg: number | null;
+  cloud_cover_pct: number | null;
+  ndvi: number | null;
+  soil_moisture_pct: number | null;
+  wind_speed_kmh: number | null;
+  wind_max_kmh: number | null;
 }
 
 /** Celda del Calendario de Actividad de Quemas (año × mes) */
@@ -42,7 +72,8 @@ export interface CalendarCell {
   active_cells: number;
   avg_frp: number | null;
   avg_cloud_cover: number | null;
-  cloud_from_model: boolean; // true si la nubosidad viene de la climatología (mes sin focos)
+  cloud_from_model: boolean; // true si la nubosidad NO viene de las celdas con focos del mes
+  cloud_origin: "cells" | "region" | "model" | null; // celdas con focos · promedio regional MODIS · modelo
   avg_soil_moisture: number | null;
   avg_slope: number | null;
   avg_wind_speed: number | null;

@@ -100,6 +100,17 @@ export default function PreventionCharterPanel({ conditions, scenarioLabel, iot,
         <p className="mt-2 rounded-md border border-slate-800 bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-300">
           {charter.recommendation}
         </p>
+        <p className="mt-1.5 text-[10px] text-slate-500">
+          Condiciones:{" "}
+          {conditions.basis === "fire-cells"
+            ? "celdas con focos del mes"
+            : conditions.basis === "region"
+              ? "promedio real de la región (mes sin focos)"
+              : conditions.basis === "fire-cells-year"
+                ? "focos de otros meses del año"
+                : "modelo paramétrico"}{" "}
+          · ráfagas: {conditions.gustSource}
+        </p>
       </div>
 
       {/* Motor de prevención */}

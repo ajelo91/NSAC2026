@@ -8,7 +8,7 @@
  *   R: celdas-día activas 2000–2026 de la celda / percentil 95 del área (supuesto), tope 100.
  * Clases de riesgo (supuesto de esta implementación): Bajo < 40 ≤ Moderado < 55 ≤ Alto < 70 ≤ Crítico.
  */
-import type { BBox, RecurrenceCell } from "@/types/fire";
+import type { BBox, EnvGridCell, RecurrenceCell } from "@/types/fire";
 import { envFor } from "./envModel";
 import { clamp } from "./rng";
 import { quantile } from "./stats";
@@ -42,6 +42,7 @@ export interface SusceptibilityCell {
   soil: number;
   wind: number;
   recurrence: number; // celdas-día históricas
+  source: "real" | "model"; // climatología real (env_grid_clim) o modelo paramétrico
 }
 
 export function buildSusceptibilityGrid(
@@ -75,10 +76,40 @@ export function buildSusceptibilityGrid(
         soil: env.soil_moisture_pct,
         wind: env.wind_speed_kmh,
         recurrence: rec,
+        source: "model",
       });
     }
   }
   return cells;
+}
+
+/** ISF con la climatología REAL del mes (SRTM, GLDAS/SMAP, POWER) en celdas de 0.05°. */
+export function buildSusceptibilityFromGrid(
+  grid: EnvGridCell[],
+  recurrence: RecurrenceCell[],
+  recurrenceCellDeg: number,
+  cellDeg = 0.05,
+): SusceptibilityCell[] {
+  const recMap = new Map(recurrence.map((r) => [`${r.lat_idx}_${r.lon_idx}`, r.cell_days]));
+  const p95 = Math.max(quantile(recurrence.map((r) => r.cell_days), 0.95), 1);
+  const h = cellDeg / 2;
+  return grid
+    .filter((g) => g.slope_deg != null && g.soil_moisture_pct != null && g.wind_speed_kmh != null)
+    .map((g) => {
+      const rec = recMap.get(`${Math.floor(g.lat / recurrenceCellDeg)}_${Math.floor(g.lon / recurrenceCellDeg)}`) ?? 0;
+      const value = isf(g.slope_deg!, g.soil_moisture_pct!, g.wind_speed_kmh!, rec / p95);
+      return {
+        bounds: [[g.lat - h, g.lon - h], [g.lat + h, g.lon + h]] as [[number, number], [number, number]],
+        center: [g.lat, g.lon] as [number, number],
+        isf: value,
+        level: riskLevel(value),
+        slope: g.slope_deg!,
+        soil: g.soil_moisture_pct!,
+        wind: g.wind_speed_kmh!,
+        recurrence: rec,
+        source: "real" as const,
+      };
+    });
 }
 
 export function levelShare(cells: SusceptibilityCell[]): Record<RiskLevel, number> {

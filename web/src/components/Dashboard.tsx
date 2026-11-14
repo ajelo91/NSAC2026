@@ -5,11 +5,13 @@ import { AlertCircle, Info } from "lucide-react";
 import type {
   BBox,
   CalendarResult,
+  EnvGridCell,
   HotspotsResult,
   MapLayers,
   Palette,
   RecurrenceCell,
   RegionKey,
+  RegionMonthEnv,
   SeriesMode,
   StudyRegion,
 } from "@/types/fire";
@@ -18,7 +20,9 @@ import {
   getBurningCalendar,
   getCalibrationAlpha,
   getHotspots,
+  getEnvGrid,
   getRecurrence,
+  getRegionMonthEnv,
   hotspotsToCsv,
   RECURRENCE_CELL_DEG,
 } from "@/lib/fireService";
@@ -34,9 +38,9 @@ import {
 } from "@/lib/regions";
 import { envFor } from "@/lib/envModel";
 import { fetchLiveReadings, type LiveReadingsResult } from "@/lib/iot";
-import { anomalyPct, cellValue, monthlyBaseline } from "@/lib/stats";
+import { anomalyPct, cellValue, monthlyBaseline, quantile } from "@/lib/stats";
 import { computeSpreadVectors, dominantBearing, compassLabel } from "@/lib/spread";
-import { buildSusceptibilityGrid } from "@/lib/susceptibility";
+import { buildSusceptibilityFromGrid, buildSusceptibilityGrid } from "@/lib/susceptibility";
 import { THRESHOLDS, type AreaConditions } from "@/lib/prevention";
 import HeaderBar from "./HeaderBar";
 import MapSelector from "./MapSelector";
@@ -71,6 +75,8 @@ export default function Dashboard() {
   const [calendar, setCalendar] = useState<CalendarResult | null>(null);
   const [hotspots, setHotspots] = useState<HotspotsResult | null>(null);
   const [recurrence, setRecurrence] = useState<RecurrenceCell[]>([]);
+  const [regionEnv, setRegionEnv] = useState<RegionMonthEnv[]>([]);
+  const [envGrid, setEnvGrid] = useState<EnvGridCell[] | null>(null);
   const [alpha, setAlpha] = useState<number | null>(null);
   const [loadingCal, setLoadingCal] = useState(true);
   const [loadingHs, setLoadingHs] = useState(true);
@@ -85,14 +91,16 @@ export default function Dashboard() {
     (async () => {
       setLoadingCal(true);
       await defer();
-      const [cal, rec, a] = await Promise.all([
+      const [cal, rec, a, renv] = await Promise.all([
         getBurningCalendar(bbox, excludeNonFire),
         getRecurrence(bbox, excludeNonFire),
         getCalibrationAlpha(),
+        getRegionMonthEnv(bbox),
       ]);
       if (cancelled) return;
       setCalendar(cal);
       setRecurrence(rec.cells);
+      setRegionEnv(renv);
       setAlpha(a.alpha);
       setLoadingCal(false);
     })();
@@ -159,9 +167,23 @@ export default function Dashboard() {
   const vegRows = useMemo(() => rows.filter((r) => r.thermal_type === "VEGETATION"), [rows]);
   const spread = useMemo(() => computeSpreadVectors(rows), [rows]);
 
+  // Grilla real del mes del escenario (climatología env_grid_clim) para el mapa ISF
+  useEffect(() => {
+    let cancelled = false;
+    getEnvGrid(bbox, scenarioMonth).then((g) => {
+      if (!cancelled) setEnvGrid(g);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [bbox, scenarioMonth]);
+
   const susceptibility = useMemo(
-    () => buildSusceptibilityGrid(bbox, selectedYear, scenarioMonth, recurrence, RECURRENCE_CELL_DEG),
-    [bbox, selectedYear, scenarioMonth, recurrence],
+    () =>
+      envGrid?.length
+        ? buildSusceptibilityFromGrid(envGrid, recurrence, RECURRENCE_CELL_DEG)
+        : buildSusceptibilityGrid(bbox, selectedYear, scenarioMonth, recurrence, RECURRENCE_CELL_DEG),
+    [envGrid, bbox, selectedYear, scenarioMonth, recurrence],
   );
 
   const iot = useMemo(() => {
@@ -173,20 +195,49 @@ export default function Dashboard() {
     });
   }, [live, bbox]);
 
-  /** Condiciones físicas del escenario: celdas activas del mes pico, o el modelo ambiental si no hay focos. */
+  /**
+   * Condiciones físicas del escenario. Prioridad de fuentes:
+   *  1) celdas con focos del mes pico (valores reales por celda-día);
+   *  2) sin focos ese mes: promedios reales de la región para ese año-mes (region_month_env)
+   *     + pendiente de la grilla real 0.05° (env_grid_clim);
+   *  3) focos de otros meses del año;  4) modelo paramétrico (solo sin base de datos).
+   */
   const conditions: AreaConditions | null = useMemo(() => {
     if (!calendar) return null;
+    type S = { slope: number; ndvi: number; soil: number; wind: number; wdir: number };
     const monthRows = vegRows.filter((r) => Number(r.acq_date.slice(5, 7)) === scenarioMonth);
-    let sample = (monthRows.length ? monthRows : vegRows).map((r) => ({
-      slope: r.slope_deg ?? 0,
-      ndvi: r.ndvi_pre_fire ?? 0,
-      soil: r.soil_moisture_pct ?? 0,
-      wind: r.wind_speed_kmh ?? 0,
-      wdir: r.wind_direction_deg ?? 0,
-    }));
-    if (!sample.length) {
+    const regionRows = regionEnv.filter((r) => r.year === selectedYear && r.month === scenarioMonth);
+    const fromRows = (rows: typeof vegRows): S[] =>
+      rows.map((r) => ({
+        slope: r.slope_deg ?? 0,
+        ndvi: r.ndvi_pre_fire ?? 0,
+        soil: r.soil_moisture_pct ?? 0,
+        wind: r.wind_speed_kmh ?? 0,
+        wdir: r.wind_direction_deg ?? 0,
+      }));
+    let sample: S[] = [];
+    let basis: AreaConditions["basis"] = "model";
+    if (monthRows.length) {
+      sample = fromRows(monthRows);
+      basis = "fire-cells";
+    } else if (regionRows.length && envGrid?.length) {
+      const avg = (k: keyof (typeof regionRows)[number]) => {
+        const v = regionRows.map((r) => r[k]).filter((x): x is number => typeof x === "number");
+        return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
+      };
+      sample = envGrid.map((g) => ({
+        slope: g.slope_deg ?? 0,
+        ndvi: avg("ndvi"),
+        soil: avg("soil_moisture_pct"),
+        wind: avg("wind_speed_kmh"),
+        wdir: avg("wind_direction_deg"),
+      }));
+      basis = "region";
+    } else if (vegRows.length) {
+      sample = fromRows(vegRows);
+      basis = "fire-cells-year";
+    } else {
       const [minLon, minLat, maxLon, maxLat] = bbox;
-      sample = [];
       for (let i = 0; i < 6; i++)
         for (let j = 0; j < 6; j++) {
           const e = envFor(
@@ -195,22 +246,31 @@ export default function Dashboard() {
             selectedYear,
             scenarioMonth,
           );
-          sample.push({
-            slope: e.slope_deg,
-            ndvi: e.ndvi_pre_fire,
-            soil: e.soil_moisture_pct,
-            wind: e.wind_speed_kmh,
-            wdir: e.wind_direction_deg,
-          });
+          sample.push({ slope: e.slope_deg, ndvi: e.ndvi_pre_fire, soil: e.soil_moisture_pct, wind: e.wind_speed_kmh, wdir: e.wind_direction_deg });
         }
     }
-    const mean = (k: keyof (typeof sample)[number]) => sample.reduce((s, x) => s + x[k], 0) / sample.length;
-    const sin = sample.reduce((s, x) => s + Math.sin((x.wdir * Math.PI) / 180), 0);
-    const cos = sample.reduce((s, x) => s + Math.cos((x.wdir * Math.PI) / 180), 0);
+    const mean = (k: keyof S) => sample.reduce((acc, x) => acc + x[k], 0) / Math.max(sample.length, 1);
+    const sin = sample.reduce((acc, x) => acc + Math.sin((x.wdir * Math.PI) / 180), 0);
+    const cos = sample.reduce((acc, x) => acc + Math.cos((x.wdir * Math.PI) / 180), 0);
     const cell = yearCells.find((c) => c.month === scenarioMonth);
     const b = baselineH[scenarioMonth - 1];
     const events = cell?.harmonized_events ?? 0;
     const wind = mean("wind");
+
+    // Ráfagas: viento máximo diario real (POWER WS10M_MAX) en los días con foco → P90;
+    // si no hay, máximo mensual regional; último recurso: estimación viento medio × 1,45.
+    const maxes = monthRows.map((r) => r.wind_max_kmh).filter((x): x is number => typeof x === "number");
+    const regionMax = regionRows.map((r) => r.wind_max_kmh).filter((x): x is number => typeof x === "number");
+    let gustKmh = wind * 1.45;
+    let gustSource = "estimada (viento medio × 1,45)";
+    if (maxes.length) {
+      gustKmh = quantile(maxes, 0.9);
+      gustSource = `POWER viento máx. diario, P90 de ${maxes.length} celdas-día`;
+    } else if (regionMax.length) {
+      gustKmh = regionMax.reduce((x, y) => x + y, 0) / regionMax.length;
+      gustSource = "POWER viento máx. del mes (región)";
+    }
+    const real = calendar.source === "supabase";
     return {
       regionLabel,
       year: selectedYear,
@@ -220,17 +280,18 @@ export default function Dashboard() {
       p90: b?.p90 ?? 0,
       anomalyPct: anomalyPct(events, b?.p50 ?? 0),
       meanSlope: mean("slope"),
-      steepShare: sample.filter((x) => x.slope > THRESHOLDS.steepSlopeDeg).length / sample.length,
+      steepShare: sample.filter((x) => x.slope > THRESHOLDS.steepSlopeDeg).length / Math.max(sample.length, 1),
       meanNdvi: mean("ndvi"),
       soilMoisture: mean("soil"),
-      soilSource: calendar.source === "supabase" ? "GLDAS/SMAP" : "modelo paramétrico",
-      gustKmh: wind * 1.45,
-      gustSource: "ráfaga estimada POWER",
+      soilSource: real && basis !== "model" ? "GLDAS/SMAP" : "modelo paramétrico",
+      gustKmh,
+      gustSource,
       cloudCover: cell?.avg_cloud_cover ?? 0,
       windDirDeg: ((Math.atan2(sin, cos) * 180) / Math.PI + 360) % 360,
       windKmh: wind,
+      basis,
     };
-  }, [calendar, vegRows, scenarioMonth, yearCells, baselineH, bbox, selectedYear, regionLabel]);
+  }, [calendar, vegRows, regionEnv, envGrid, scenarioMonth, yearCells, baselineH, bbox, selectedYear, regionLabel]);
 
   const windOverlay: WindOverlay | null = useMemo(() => {
     if (!conditions) return null;
@@ -361,7 +422,12 @@ export default function Dashboard() {
                 wind={windOverlay}
                 layers={layers}
                 onToggleLayer={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
-                hotspotCount={rows.length}
+                isfLabel={
+                susceptibility[0]?.source === "real"
+                  ? `ISF · climatología real de ${MONTHS_LONG[scenarioMonth - 1].toLowerCase()} (0,05°)`
+                  : "ISF · modelo paramétrico"
+              }
+              hotspotCount={rows.length}
                 truncated={hotspots?.truncated ?? false}
                 loading={loadingHs}
                 yearControl={

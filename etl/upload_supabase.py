@@ -58,8 +58,14 @@ COLUMNS = [
     "wind_speed_kmh",
     "wind_direction_deg",
     "ndvi_pre_fire",
+    "wind_max_kmh",
     "env_source",
 ]
+# Tablas auxiliares reales (etl/env/build_aux.py) — se suben si existen los CSV
+AUX_TABLES = {
+    "region_month_env": "region_month_env.csv",
+    "env_grid_clim": "env_grid_clim.csv",
+}
 VALID_SENSORS = {"MODIS", "VIIRS", "BOTH"}
 VALID_THERMAL = {"VEGETATION", "VOLCANIC_INDUSTRIAL"}
 VALID_REGIONS = {"CORDOBA", "PATAGONIA"}
@@ -108,10 +114,12 @@ def load_records(csv_path: Path) -> list[dict]:
     return records
 
 
-def insert_with_retry(client, rows: list[dict], max_retries: int, base_delay: float) -> None:
+def insert_with_retry(client, rows: list[dict], max_retries: int, base_delay: float,
+                      table: str = TABLE, upsert: bool = False) -> None:
     for attempt in range(1, max_retries + 1):
         try:
-            client.table(TABLE).insert(rows, returning="minimal").execute()
+            q = client.table(table)
+            (q.upsert(rows, returning="minimal") if upsert else q.insert(rows, returning="minimal")).execute()
             return
         except Exception as exc:  # errores de red, 5xx, timeouts de PostgREST
             if attempt == max_retries:
@@ -120,6 +128,30 @@ def insert_with_retry(client, rows: list[dict], max_retries: int, base_delay: fl
             tqdm.write(f"  ⚠ intento {attempt}/{max_retries} falló ({type(exc).__name__}: {exc}); "
                        f"reintento en {delay:.1f}s")
             time.sleep(delay)
+
+
+def upload_aux_tables(client, aux_dir: Path, args) -> int:
+    """Sube (upsert por clave primaria) las tablas auxiliares reales si existen sus CSV."""
+    failures = 0
+    for table, fname in AUX_TABLES.items():
+        path = aux_dir / fname
+        if not path.exists():
+            print(f"  · {fname} no existe (python etl/env/build_aux.py); se omite '{table}'")
+            continue
+        df = pd.read_csv(path)
+        recs = df.astype(object).where(df.notna(), None).to_dict(orient="records")
+        n = math.ceil(len(recs) / args.batch_size)
+        print(f"▶ {len(recs):,} filas → '{table}' (upsert)")
+        with tqdm(total=len(recs), unit="fila") as bar:
+            for b in range(n):
+                rows = recs[b * args.batch_size : (b + 1) * args.batch_size]
+                try:
+                    insert_with_retry(client, rows, args.max_retries, args.retry_delay, table=table, upsert=True)
+                except Exception as exc:
+                    failures += 1
+                    tqdm.write(f"  ✗ {table} lote {b}: {exc}")
+                bar.update(len(rows))
+    return failures
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -136,6 +168,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Borra TODAS las filas de la tabla antes de subir (pide confirmación; usar --yes para omitirla)",
     )
     p.add_argument("--yes", action="store_true", help="No pedir confirmación con --replace")
+    p.add_argument("--aux-dir", type=Path, default=ETL_DIR / "aux_data", help="Carpeta de las tablas auxiliares")
+    p.add_argument("--aux-only", action="store_true", help="Subir solo las tablas auxiliares (región-mes y grilla ISF)")
     return p.parse_args(argv)
 
 
@@ -153,6 +187,9 @@ def main(argv=None) -> int:
     from supabase import create_client  # import diferido: --dry-run no requiere la librería
 
     client = create_client(url, key)
+
+    if args.aux_only:
+        return 1 if upload_aux_tables(client, args.aux_dir, args) else 0
 
     if args.replace:
         existing = client.table(TABLE).select("id", count="exact").limit(1).execute().count or 0
@@ -181,6 +218,9 @@ def main(argv=None) -> int:
             bar.update(len(rows))
 
     print(f"✔ {uploaded:,} filas insertadas en '{TABLE}'")
+    aux_failures = upload_aux_tables(client, args.aux_dir, args)
+    if aux_failures:
+        print(f"✗ {aux_failures} lote(s) auxiliares fallidos; reintentá con: python etl/upload_supabase.py --aux-only")
     if failed:
         print(f"✗ {len(failed)} lote(s) fallidos: {failed}")
         print(f"  Reanudá desde el primero con: python etl/upload_supabase.py --start-batch {failed[0]}")

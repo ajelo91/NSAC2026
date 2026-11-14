@@ -57,7 +57,7 @@ function sources(db: boolean, live: boolean): { agency: string; product: string;
       agency: "NASA POWER / MERRA-2",
       product: "Viento mensual a 10 m (WS10M, WD10M), ~0.5°",
       variable: "wind_speed_kmh, wind_direction_deg",
-      role: "V_viento del ISF; cono de avance probable",
+      role: "V_viento del ISF; cono de avance; WS10M_MAX diario para la regla de ráfagas",
       status: etl,
     },
     {
@@ -253,7 +253,7 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource, liv
           <b>Integrado</b>: valores reales procesados por el ETL (<code>etl/env/</code>: Earth Engine + NASA POWER) y
           servidos desde Supabase (<code>env_source = &apos;AUX&apos;</code>). <b>Modelo paramétrico</b>: climatologías
           aproximadas usadas solo cuando la app corre sin base de datos. El mapa de susceptibilidad (ISF) todavía usa el
-          modelo paramétrico para las celdas sin focos. Las ráfagas del escenario histórico se estiman como viento medio × 1,45.
+          modelo paramétrico solo si falta la grilla real (<code>env_grid_clim</code>, climatología mensual 0,05° de SRTM, GLDAS/SMAP y POWER). Las ráfagas usan el viento máximo diario de NASA POWER (<code>WS10M_MAX</code>, máximo de promedios horarios, no ráfaga instantánea); si falta, se estiman como viento medio × 1,45.
           {dataSource === "mock" &&
             " Esta sesión no tiene Supabase configurado: focos y variables son sintéticos, generados en el navegador."}
         </p>

@@ -221,6 +221,7 @@ function buildDataset(): MockDataset {
       max_frp: c.maxFrp,
       thermal_type: thermal,
       ...envFor(lat, lon, year, month),
+      wind_max_kmh: null,
       env_source: "PARAMETRIC",
     });
   }

@@ -165,7 +165,11 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
               <Row k="Humedad de suelo" v={`${c.soil.toFixed(1)} %`} />
               <Row k="Viento POWER" v={`${c.wind.toFixed(1)} km/h`} />
               <Row k="Recurrencia histórica" v={`${c.recurrence} celdas-día`} />
-              <p style={{ marginTop: 6, color: "#94a3b8" }}>Variables ambientales: modelo paramétrico.</p>
+              <p style={{ marginTop: 6, color: "#94a3b8" }}>
+                {c.source === "real"
+                  ? "Climatología real del mes: SRTM · GLDAS/SMAP · NASA POWER (celda 0,05°)."
+                  : "Variables ambientales: modelo paramétrico."}
+              </p>
             </Popup>
           </Rectangle>
         ))}
@@ -206,6 +210,7 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
                   }
                 />
                 <Row k="NDVI previo" v={h.ndvi_pre_fire != null ? h.ndvi_pre_fire.toFixed(2) : "—"} />
+                <Row k="Viento máx. del día" v={h.wind_max_kmh != null ? `${h.wind_max_kmh.toFixed(0)} km/h` : "—"} />
                 <p style={{ marginTop: 6, color: "#94a3b8" }}>
                   {h.env_source === "PARAMETRIC"
                     ? "Variables ambientales: modelo paramétrico."

@@ -24,6 +24,7 @@ interface Props extends Omit<MapViewProps, "show"> {
   truncated: boolean;
   loading: boolean;
   yearControl?: React.ReactNode;
+  isfLabel?: string;
 }
 
 const LAYER_DEFS: { key: keyof MapLayers; label: string; hint: string; Icon: typeof Flame }[] = [
@@ -135,6 +136,7 @@ export default function MapSelector(props: Props) {
               <span className="inline-block h-0.5 w-5 bg-yellow-300" /> Vector de propagación (inicio → fin)
             </p>
           )}
+          {layers.susceptibility && props.isfLabel && <p className="text-slate-400">{props.isfLabel}</p>}
           {layers.susceptibility && (
             <div className="flex flex-wrap gap-x-2 gap-y-1">
               {Object.entries(RISK_COLORS).map(([k, c]) => (

@@ -32,6 +32,8 @@ export interface AreaConditions {
   cloudCover: number;
   windDirDeg: number;
   windKmh: number;
+  /** De dónde salen pendiente/humedad/NDVI/viento del escenario */
+  basis?: "fire-cells" | "region" | "fire-cells-year" | "model";
 }
 
 export type Severity = "info" | "warning" | "critical";
@@ -66,7 +68,7 @@ export function buildPreventionActions(c: AreaConditions): PreventionAction[] {
       severity: "critical",
       triggered: c.soilMoisture < THRESHOLDS.drySoilPct && c.gustKmh > THRESHOLDS.gustKmh,
       evidence: `Humedad ${f(c.soilMoisture, 1)} % (${c.soilSource}) · ráfagas ${f(c.gustKmh)} km/h (${c.gustSource})`,
-      sources: ["NASA GLDAS-2.1 / SMAP", "NASA POWER"],
+      sources: ["NASA GLDAS-2.1 / SMAP", "NASA POWER (WS10M_MAX)"],
     },
     {
       id: "fuel",

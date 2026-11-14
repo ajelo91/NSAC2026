@@ -10,6 +10,12 @@ Entradas:
   etl/harmonized_output.csv         (celdas-día a enriquecer; correr harmonize.py antes)
 
 Salidas:
+  etl/aux_data/region_month_env.csv región × año × mes: promedios reales sobre TODA la región
+                                    (nubosidad, humedad, NDVI, viento, viento máx.) — calendario
+                                    y condiciones de meses sin focos
+  etl/aux_data/env_grid_clim.csv    grilla 0.05° × mes del año: climatología real (pendiente,
+                                    humedad, nubosidad, NDVI, viento, viento máx.) — mapa ISF
+  etl/aux_data/wind_max_cell_day.csv grid_cell_id, acq_date, wind_max_kmh (POWER WS10M_MAX)
   etl/aux_data/terrain_cells.csv    grid_cell_id, slope_deg
   etl/aux_data/env_cell_month.csv   grid_cell_id, year, month, soil_moisture_pct,
                                     cloud_cover_pct, wind_speed_kmh, wind_direction_deg,
@@ -30,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -40,11 +47,19 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("Falta rasterio: pip install rasterio")
 
+warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
+
 ETL_DIR = Path(__file__).resolve().parents[1]
 AUX_DIR = ETL_DIR / "aux_data"
 START_YEAR, START_MONTH = 2000, 1
 NODATA = -9999
 GRID_SCALE = 100
+COARSE_DEG = 0.05          # celda del mapa de susceptibilidad (5 × 5 píxeles de 0.01°)
+COARSE_PX = 5
+REGIONS = {
+    "CORDOBA": (-65.20, -32.60, -64.00, -30.80),
+    "PATAGONIA": (-72.20, -43.50, -70.80, -41.50),
+}
 
 
 class Raster:
@@ -96,6 +111,148 @@ def load_rasters(raster_dir: Path, region: str) -> dict[str, Raster]:
     return out
 
 
+def circ_mean(deg: np.ndarray) -> float:
+    deg = deg[~np.isnan(deg)]
+    if deg.size == 0:
+        return float("nan")
+    r = np.radians(deg)
+    return float((np.degrees(np.arctan2(np.sin(r).mean(), np.cos(r).mean())) + 360) % 360)
+
+
+def soil_stack(rs: dict) -> np.ndarray | None:
+    """GLDAS donde hay dato; SMAP donde falta GLDAS (bandas × filas × columnas)."""
+    g = rs.get("soil_gldas")
+    m = rs.get("soil_smap")
+    if g is None and m is None:
+        return None
+    if g is None:
+        return m.data
+    if m is None:
+        return g.data
+    return np.where(np.isnan(g.data), m.data, g.data)
+
+
+def region_month_table(region: str, rs: dict, power: pd.DataFrame | None, daily: pd.DataFrame | None) -> pd.DataFrame:
+    """Promedios mensuales sobre todos los píxeles de la región (no solo celdas con focos)."""
+    any_r = next((r for r in rs.values() if r.bands > 1), None)
+    if any_r is None:
+        return pd.DataFrame()
+    n = any_r.bands
+    years = START_YEAR + (np.arange(n) + START_MONTH - 1) // 12
+    months = (np.arange(n) + START_MONTH - 1) % 12 + 1
+    out = pd.DataFrame({"region": region, "year": years, "month": months})
+    with np.errstate(all="ignore"):
+        if "cloud" in rs:
+            out["cloud_cover_pct"] = np.round(np.nanmean(rs["cloud"].data, axis=(1, 2)), 1)
+        if "ndvi" in rs:
+            out["ndvi"] = np.round(np.nanmean(rs["ndvi"].data, axis=(1, 2)), 3)
+        soil = soil_stack(rs)
+        if soil is not None:
+            out["soil_moisture_pct"] = np.round(np.nanmean(soil, axis=(1, 2)), 1)
+    if power is not None:
+        pr = power[power["region"] == region]
+        agg = pr.groupby(["year", "month"]).agg(
+            wind_speed_kmh=("wind_speed_kmh", "mean"),
+            wind_direction_deg=("wind_direction_deg", lambda x: circ_mean(x.to_numpy(dtype=float))),
+        ).round(1).reset_index()
+        out = out.merge(agg, on=["year", "month"], how="left")
+    if daily is not None:
+        dr = daily[daily["region"] == region].copy()
+        dr["year"], dr["month"] = dr["date"].dt.year, dr["date"].dt.month
+        # máximo del mes en cada nodo, promediado entre nodos
+        mx = dr.groupby(["node_lat", "node_lon", "year", "month"])["wind_max_kmh"].max()
+        out = out.merge(mx.groupby(["year", "month"]).mean().round(1).rename("wind_max_kmh").reset_index(),
+                        on=["year", "month"], how="left")
+    return out
+
+
+def grid_clim_table(region: str, rs: dict, power: pd.DataFrame | None, daily: pd.DataFrame | None) -> pd.DataFrame:
+    """Climatología por mes del año en celdas de 0.05° (bloques de 5 × 5 píxeles)."""
+    min_lon, min_lat, max_lon, max_lat = REGIONS[region]
+    ref = rs.get("slope") or next(iter(rs.values()), None)
+    if ref is None:
+        return pd.DataFrame()
+    H, W = ref.rows // COARSE_PX, ref.cols // COARSE_PX
+    rr, cc = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
+    lat = max_lat - (rr + 0.5) * COARSE_DEG
+    lon = min_lon + (cc + 0.5) * COARSE_DEG
+    base = pd.DataFrame({
+        "cell_id": [f"{int(np.floor(a / COARSE_DEG))}_{int(np.floor(o / COARSE_DEG))}" for a, o in zip(lat.ravel(), lon.ravel())],
+        "region": region,
+        "lat": np.round(lat.ravel(), 4),
+        "lon": np.round(lon.ravel(), 4),
+    })
+
+    def blocks(arr: np.ndarray) -> np.ndarray:  # (bandas, H*5, W*5) -> (bandas, H, W) media de bloque
+        b = arr[:, : H * COARSE_PX, : W * COARSE_PX].reshape(arr.shape[0], H, COARSE_PX, W, COARSE_PX)
+        with np.errstate(all="ignore"):
+            return np.nanmean(b, axis=(2, 4))
+
+    def monthly_clim(arr: np.ndarray) -> np.ndarray:  # -> (12, H, W)
+        bl = blocks(arr)
+        m = (np.arange(bl.shape[0]) + START_MONTH - 1) % 12
+        with np.errstate(all="ignore"):
+            return np.stack([np.nanmean(bl[m == k], axis=0) for k in range(12)])
+
+    if "slope" in rs:
+        base["slope_deg"] = np.round(blocks(rs["slope"].data)[0].ravel(), 1)
+    clims = {}
+    if "cloud" in rs:
+        clims["cloud_cover_pct"] = (monthly_clim(rs["cloud"].data), 1)
+    if "ndvi" in rs:
+        clims["ndvi"] = (monthly_clim(rs["ndvi"].data), 3)
+    soil = soil_stack(rs)
+    if soil is not None:
+        clims["soil_moisture_pct"] = (monthly_clim(soil), 1)
+
+    parts = []
+    for k in range(12):
+        t = base.copy()
+        t["month"] = k + 1
+        for col, (arr, d) in clims.items():
+            t[col] = np.round(arr[k].ravel(), d)
+        parts.append(t)
+    out = pd.concat(parts, ignore_index=True)
+
+    # Viento: climatología del nodo POWER más cercano
+    def nearest_node(df_nodes: pd.DataFrame) -> pd.DataFrame:
+        nn = df_nodes[["node_lat", "node_lon"]].drop_duplicates().to_numpy()
+        d = (base["lat"].to_numpy()[:, None] - nn[None, :, 0]) ** 2 + (base["lon"].to_numpy()[:, None] - nn[None, :, 1]) ** 2
+        k = d.argmin(axis=1)
+        return pd.DataFrame({"cell_id": base["cell_id"], "node_lat": nn[k, 0], "node_lon": nn[k, 1]})
+
+    if power is not None and not power[power["region"] == region].empty:
+        pr = power[power["region"] == region]
+        clim = pr.groupby(["node_lat", "node_lon", "month"])["wind_speed_kmh"].mean().round(1).rename("wind_speed_kmh").reset_index()
+        out = out.merge(nearest_node(pr), on="cell_id").merge(clim, on=["node_lat", "node_lon", "month"], how="left")
+        out = out.drop(columns=["node_lat", "node_lon"])
+    if daily is not None and not daily[daily["region"] == region].empty:
+        dr = daily[daily["region"] == region].copy()
+        dr["year"], dr["month"] = dr["date"].dt.year, dr["date"].dt.month
+        mx = dr.groupby(["node_lat", "node_lon", "year", "month"])["wind_max_kmh"].max().reset_index()
+        clim = mx.groupby(["node_lat", "node_lon", "month"])["wind_max_kmh"].mean().round(1).reset_index()
+        out = out.merge(nearest_node(dr), on="cell_id").merge(clim, on=["node_lat", "node_lon", "month"], how="left")
+        out = out.drop(columns=["node_lat", "node_lon"])
+    return out
+
+
+def wind_max_cells(cells_days: pd.DataFrame, daily: pd.DataFrame) -> pd.DataFrame:
+    """Viento máximo diario (POWER WS10M_MAX) del nodo más cercano para cada celda-día con foco."""
+    parts = []
+    for region, g in cells_days.groupby("region"):
+        dr = daily[daily["region"] == region]
+        if dr.empty:
+            continue
+        nn = dr[["node_lat", "node_lon"]].drop_duplicates().to_numpy()
+        d = (g["lat"].to_numpy()[:, None] - nn[None, :, 0]) ** 2 + (g["lon"].to_numpy()[:, None] - nn[None, :, 1]) ** 2
+        k = d.argmin(axis=1)
+        gg = g.assign(node_lat=nn[k, 0], node_lon=nn[k, 1], date=pd.to_datetime(g["acq_date"]))
+        parts.append(gg.merge(dr, on=["region", "node_lat", "node_lon", "date"], how="left"))
+    if not parts:
+        return pd.DataFrame(columns=["grid_cell_id", "acq_date", "wind_max_kmh"])
+    return pd.concat(parts)[["grid_cell_id", "acq_date", "wind_max_kmh"]]
+
+
 def nearest_wind(cells: pd.DataFrame, power: pd.DataFrame) -> pd.DataFrame:
     nodes = power[["region", "node_lat", "node_lon"]].drop_duplicates()
     picked = []
@@ -123,20 +280,27 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Tablas auxiliares reales para harmonize.py")
     p.add_argument("--rasters", type=Path, default=AUX_DIR / "rasters")
     p.add_argument("--power", type=Path, default=AUX_DIR / "power_wind_nodes.csv")
+    p.add_argument("--power-daily", type=Path, default=AUX_DIR / "power_wind_daily.csv")
     p.add_argument("--cells", type=Path, default=ETL_DIR / "harmonized_output.csv")
     p.add_argument("--out-dir", type=Path, default=AUX_DIR)
     args = p.parse_args(argv)
 
     if not args.cells.exists():
         sys.exit(f"✗ No existe {args.cells}. Corré primero: python etl/harmonize.py")
-    cells = pd.read_csv(args.cells, usecols=["grid_cell_id", "region", "year", "month", "lat", "lon"])
+    cells = pd.read_csv(args.cells, usecols=["grid_cell_id", "region", "acq_date", "year", "month", "lat", "lon"])
+    power = pd.read_csv(args.power) if args.power.exists() else None
+    daily = pd.read_csv(args.power_daily, parse_dates=["date"]) if args.power_daily.exists() else None
+    if daily is None:
+        print(f"  ⚠ falta {args.power_daily.name} (python etl/env/fetch_power.py --daily): sin viento máximo diario")
     cm = cells.drop_duplicates(["grid_cell_id", "year", "month"]).reset_index(drop=True)
     print(f"▶ {cm['grid_cell_id'].nunique():,} celdas · {len(cm):,} celdas-mes a enriquecer")
 
-    terrain_parts, env_parts = [], []
+    terrain_parts, env_parts, region_parts, grid_parts = [], [], [], []
     for region, g in cm.groupby("region"):
         print(f"▶ {region}")
         rs = load_rasters(args.rasters, region)
+        region_parts.append(region_month_table(region, rs, power, daily))
+        grid_parts.append(grid_clim_table(region, rs, power, daily))
         lat, lon = g["lat"].to_numpy(), g["lon"].to_numpy()
         idx = month_index(g["year"].to_numpy(), g["month"].to_numpy())
         env = g[["grid_cell_id", "year", "month"]].copy()
@@ -171,8 +335,7 @@ def main(argv=None) -> int:
         env_parts.append(env)
 
     env = pd.concat(env_parts, ignore_index=True)
-    if args.power.exists():
-        power = pd.read_csv(args.power)
+    if power is not None:
         wind = nearest_wind(cm[["grid_cell_id", "region", "year", "month", "lat", "lon"]], power)
         env = env.merge(
             wind[["grid_cell_id", "year", "month", "wind_speed_kmh", "wind_direction_deg"]],
@@ -192,6 +355,17 @@ def main(argv=None) -> int:
     print(f"✔ env_cell_month.csv: {len(env):,} celdas-mes · cobertura {cov}")
     if "soil_source" in env:
         print(f"  humedad de suelo por fuente: {env['soil_source'].value_counts(dropna=False).to_dict()}")
+    rm = pd.concat(region_parts, ignore_index=True)
+    rm.to_csv(args.out_dir / "region_month_env.csv", index=False)
+    print(f"✔ region_month_env.csv: {len(rm):,} región-meses · columnas {[c for c in rm.columns if c not in ('region','year','month')]}")
+    gc = pd.concat(grid_parts, ignore_index=True)
+    gc.to_csv(args.out_dir / "env_grid_clim.csv", index=False)
+    print(f"✔ env_grid_clim.csv: {gc['cell_id'].nunique():,} celdas 0.05° × 12 meses = {len(gc):,} filas")
+    if daily is not None:
+        wm = wind_max_cells(cells.drop_duplicates(["grid_cell_id", "acq_date"]), daily)
+        wm.to_csv(args.out_dir / "wind_max_cell_day.csv", index=False)
+        print(f"✔ wind_max_cell_day.csv: {len(wm):,} celdas-día · con dato {wm['wind_max_kmh'].notna().mean():.0%}"
+              f" · > 35 km/h: {(wm['wind_max_kmh'] > 35).mean():.1%}")
     print("▶ Ahora volvé a correr: python etl/harmonize.py")
     return 0
 

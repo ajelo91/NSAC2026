@@ -110,6 +110,7 @@ OUTPUT_COLUMNS = [
     "max_frp",
     "thermal_type",
     *ENV_COLUMNS,
+    "wind_max_kmh",
     "env_source",
 ]
 
@@ -212,6 +213,7 @@ class PipelineStats:
     stationary_scale: str = STATIONARY_SCALE_DEFAULT
     harmonization_mode: str = HARMONIZATION_DEFAULT
     continuity: dict = field(default_factory=dict)
+    calibration_window: tuple = ("", "")
 
 
 def stage1_quality_filter(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFrame:
@@ -298,11 +300,13 @@ def stage3_grid_aggregation(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFr
     return cells
 
 
-def harmonized_weights(cells: pd.DataFrame, alpha: float, mode: str) -> np.ndarray:
+def harmonized_weights(
+    cells: pd.DataFrame, alpha: float, mode: str, viirs_start: pd.Timestamp = VIIRS_ERA_START
+) -> np.ndarray:
     if mode == "methodology":
         return np.where(cells["has_modis"], 1.0, alpha)
     if mode == "viirs-scaled":
-        pre_viirs = (cells["acq_date"] < VIIRS_ERA_START).to_numpy()
+        pre_viirs = (cells["acq_date"] < viirs_start).to_numpy()
         return np.where(pre_viirs, 1.0, np.where(cells["has_viirs"], alpha, 0.0))
     raise ValueError(f"modo de armonización inválido: {mode!r} {HARMONIZATION_MODES}")
 
@@ -322,10 +326,16 @@ def stage4_transfer_calibration(
     cells: pd.DataFrame, stats: PipelineStats, mode: str = HARMONIZATION_DEFAULT
 ) -> pd.DataFrame:
     """alpha se estima SOLO en Córdoba (celdas-día VEGETATION 2012-2024) y se transfiere a Patagonia."""
+    # La ventana de calibración es el período de observación SIMULTÁNEA: empieza en la primera
+    # fecha con datos VIIRS (el archivo FIRMS VIIRS S-NPP C2 arranca el 20-11-2012, no en enero).
+    viirs_dates = cells.loc[cells["has_viirs"], "acq_date"]
+    first_viirs = viirs_dates.min() if not viirs_dates.empty else VIIRS_ERA_START
+    window_start = max(pd.Timestamp(f"{CALIBRATION_START_YEAR}-01-01"), first_viirs)
+    window_end = pd.Timestamp(f"{CALIBRATION_END_YEAR}-12-31")
     calib = (
         (cells["region"] == CALIBRATION_REGION)
         & (cells["thermal_type"] == VEGETATION)
-        & cells["year"].between(CALIBRATION_START_YEAR, CALIBRATION_END_YEAR)
+        & cells["acq_date"].between(window_start, window_end)
     )
     n_modis = int((calib & cells["has_modis"]).sum())
     n_viirs = int((calib & cells["has_viirs"]).sum())
@@ -335,12 +345,13 @@ def stage4_transfer_calibration(
     else:
         alpha = n_modis / n_viirs
     cells = cells.copy()
-    cells["harmonized_weight"] = harmonized_weights(cells, alpha, mode)
+    cells["harmonized_weight"] = harmonized_weights(cells, alpha, mode, first_viirs)
     stats.alpha, stats.modis_window_events, stats.viirs_window_events = alpha, n_modis, n_viirs
+    stats.calibration_window = (window_start.date().isoformat(), window_end.date().isoformat())
     stats.harmonization_mode = mode
     # Diagnóstico de continuidad para AMBAS variantes (para comparar)
     stats.continuity = {
-        m: {r: continuity_ratio(cells, harmonized_weights(cells, alpha, m), r) for r in REGIONS}
+        m: {r: continuity_ratio(cells, harmonized_weights(cells, alpha, m, first_viirs), r) for r in REGIONS}
         for m in HARMONIZATION_MODES
     }
     return cells
@@ -468,6 +479,15 @@ def stage5_environment(cells: pd.DataFrame, aux_dir: Path, stats: PipelineStats)
             cells[c] = merged[c].to_numpy()
         print(f"  • {envf.name}: variables {cols}")
 
+    # Viento máximo diario (NASA POWER WS10M_MAX) — sin relleno paramétrico: NaN si falta
+    cells["wind_max_kmh"] = np.nan
+    wmax = aux_dir / "wind_max_cell_day.csv"
+    if wmax.exists():
+        w = pd.read_csv(wmax, dtype={"grid_cell_id": str}, parse_dates=["acq_date"])
+        merged = cells[["grid_cell_id", "acq_date"]].merge(w, on=["grid_cell_id", "acq_date"], how="left")
+        cells["wind_max_kmh"] = merged["wind_max_kmh"].to_numpy()
+        print(f"  • {wmax.name}: viento máximo diario para {cells['wind_max_kmh'].notna().sum():,} celdas-día")
+
     from_aux = cells[ENV_COLUMNS].notna()
     model = parametric_environment(cells)
     for c in ENV_COLUMNS:
@@ -526,7 +546,7 @@ def print_summary(out: pd.DataFrame, stats: PipelineStats) -> None:
           f"{stats.stationary_detections:,} detecciones, {stats.stationary_cell_days:,} celdas-día")
     print(f" Celdas-día totales ................... {len(out):>11,}")
     print(line)
-    print(" CALIBRACIÓN EN SIERRAS DE CÓRDOBA (VEGETATION, 2012-2024)")
+    print(f" CALIBRACIÓN EN SIERRAS DE CÓRDOBA (VEGETATION, {stats.calibration_window[0]} → {stats.calibration_window[1]})")
     print(f"   celdas-día MODIS ................... {stats.modis_window_events:>11,}")
     print(f"   celdas-día VIIRS ................... {stats.viirs_window_events:>11,}")
     print(f"   ALPHA (Córdoba) = MODIS / VIIRS .... {stats.alpha:>11.4f}")
