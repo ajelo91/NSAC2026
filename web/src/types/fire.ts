@@ -108,6 +108,23 @@ export interface HotspotsResult {
   warning?: string;
 }
 
+export interface LiveHotspot {
+  id: number;
+  detection_key: string;
+  provider: string;
+  product: string;
+  satellite: string | null;
+  instrument: string | null;
+  acq_date: string;
+  acq_time: string;
+  latitude: number;
+  longitude: number;
+  frp_mw: number | null;
+  confidence: string | null;
+  brightness: number | null;
+  ingested_at: string;
+}
+
 export interface RecurrenceCell {
   lat_idx: number;
   lon_idx: number;
@@ -124,6 +141,7 @@ export interface MonthlyBaseline {
 
 export interface MapLayers {
   hotspots: boolean;
+  live: boolean;
   spread: boolean;
   susceptibility: boolean;
   iot: boolean;
