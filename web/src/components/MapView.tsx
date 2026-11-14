@@ -16,7 +16,7 @@ import {
   Tooltip,
   useMap,
 } from "react-leaflet";
-import type { BBox, HotspotRecord } from "@/types/fire";
+import type { BBox, HotspotRecord, LiveHotspot } from "@/types/fire";
 import type { IotStation } from "@/lib/regions";
 import { fmt, type IotReading } from "@/lib/iot";
 import type { SpreadVector } from "@/lib/spread";
@@ -35,11 +35,12 @@ export interface WindOverlay {
 export interface MapViewProps {
   bbox: BBox;
   hotspots: HotspotRecord[];
+  liveHotspots: LiveHotspot[];
   spread: SpreadVector[];
   susceptibility: SusceptibilityCell[];
   iot: { station: IotStation; reading: IotReading }[];
   wind: WindOverlay | null;
-  show: { hotspots: boolean; spread: boolean; susceptibility: boolean; iot: boolean; wind: boolean };
+  show: { hotspots: boolean; live: boolean; spread: boolean; susceptibility: boolean; iot: boolean; wind: boolean };
 }
 
 const MAX_DRAWN_HOTSPOTS = 3500;
@@ -87,7 +88,7 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-export default function MapView({ bbox, hotspots, spread, susceptibility, iot, wind, show }: MapViewProps) {
+export default function MapView({ bbox, hotspots, liveHotspots, spread, susceptibility, iot, wind, show }: MapViewProps) {
   const drawn = useMemo(
     () =>
       hotspots.length > MAX_DRAWN_HOTSPOTS
@@ -172,6 +173,24 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
               </p>
             </Popup>
           </Rectangle>
+        ))}
+
+      {show.live &&
+        liveHotspots.map((h) => (
+          <CircleMarker key={h.detection_key} center={[h.latitude, h.longitude]} radius={6}
+            pathOptions={{ color: "#f8fafc", weight: 1.5, fillColor: "#ef4444", fillOpacity: 0.95 }}>
+            <Popup>
+              <strong>Detección satelital reciente</strong>
+              <Row k="Fuente" v={h.provider} />
+              <Row k="Producto" v={h.product} />
+              <Row k="Satélite" v={h.satellite ?? "—"} />
+              <Row k="Adquisición" v={h.acq_date + " · " + h.acq_time + " UTC"} />
+              <Row k="Confianza FIRMS" v={h.confidence ?? "No informada"} />
+              <Row k="FRP" v={h.frp_mw != null ? h.frp_mw.toFixed(1) + " MW" : "—"} />
+              <Row k="Incorporado" v={new Date(h.ingested_at).toLocaleString("es-AR")} />
+              <p style={{ marginTop: 6, color: "#b45309" }}>Anomalía térmica satelital; no equivale por sí sola a un incendio confirmado.</p>
+            </Popup>
+          </CircleMarker>
         ))}
 
       {show.hotspots &&
