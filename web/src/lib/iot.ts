@@ -1,27 +1,41 @@
 /**
- * Red IoT de campo — LECTURAS SIMULADAS para la demo (no hay estaciones desplegadas).
- * Modelo: climatología mensual de la Comarca Andina + ciclo diurno + ruido determinístico
- * que cambia cada minuto. Para producción, reemplazar readStation() por la API de la red real.
+ * Estaciones de la Comarca Andina — condiciones actuales.
+ *  - Fuente principal: Meteomatics (ruta de servidor /api/iot). Son valores del modelo "mix"
+ *    de Meteomatics en el punto de cada estación, no mediciones de sensores en campo.
+ *  - Respaldo: lecturas SIMULADAS (climatología + ciclo diurno) cuando la API no está configurada
+ *    o falla. Siempre se indica la fuente en la UI.
  */
 import type { IotStation } from "./regions";
 import { CLIMATOLOGY } from "./envModel";
 import { clamp, hash01, round } from "./rng";
 
+export type IotSource = "meteomatics" | "simulated";
+
 export interface IotReading {
   stationId: string;
   timestamp: string; // ISO
-  temperature_c: number;
-  relative_humidity_pct: number;
-  wind_speed_kmh: number;
-  wind_gust_kmh: number;
-  wind_direction_deg: number;
-  soil_moisture_pct: number;
-  simulated: true;
+  temperature_c: number | null;
+  relative_humidity_pct: number | null;
+  wind_speed_kmh: number | null;
+  wind_gust_kmh: number | null;
+  wind_direction_deg: number | null;
+  /** Humedad volumétrica (%). Solo en lecturas simuladas. */
+  soil_moisture_pct: number | null;
+  /** Índice de humedad de suelo de Meteomatics (0–1, puede superar 1 tras lluvias). */
+  soil_moisture_index: number | null;
+  source: IotSource;
 }
 
+export interface LiveReadingsResult {
+  readings: IotReading[];
+  source: IotSource;
+  fetchedAt: string;
+  note?: string;
+}
+
+/** Lectura simulada (respaldo). */
 export function readStation(station: IotStation, now: Date, stationIndex: number): IotReading {
-  // hora local Argentina (UTC−3)
-  const local = new Date(now.getTime() - 3 * 3_600_000);
+  const local = new Date(now.getTime() - 3 * 3_600_000); // hora local Argentina (UTC−3)
   const month = local.getUTCMonth();
   const hour = local.getUTCHours() + local.getUTCMinutes() / 60;
   const doy = Math.floor((local.getTime() - Date.UTC(local.getUTCFullYear(), 0, 1)) / 86_400_000);
@@ -45,6 +59,39 @@ export function readStation(station: IotStation, now: Date, stationIndex: number
     wind_gust_kmh: round(wind * (1.45 + 0.15 * n(5)), 1),
     wind_direction_deg: Math.round((c.wdir[month] + 15 * n(6) + 360) % 360),
     soil_moisture_pct: round(soil, 1),
-    simulated: true,
+    soil_moisture_index: null,
+    source: "simulated",
   };
 }
+
+function simulated(stations: IotStation[], note: string): LiveReadingsResult {
+  const now = new Date();
+  return {
+    readings: stations.map((s, i) => readStation(s, now, i)),
+    source: "simulated",
+    fetchedAt: now.toISOString(),
+    note,
+  };
+}
+
+/** Condiciones actuales desde /api/iot (Meteomatics); si falla, lecturas simuladas. */
+export async function fetchLiveReadings(stations: IotStation[]): Promise<LiveReadingsResult> {
+  try {
+    const res = await fetch("/api/iot", { cache: "no-store" });
+    const body = await res.json();
+    if (!res.ok) return simulated(stations, body?.error ?? `HTTP ${res.status}`);
+    const byId = new Map<string, Omit<IotReading, "source" | "soil_moisture_pct">>(
+      body.readings.map((r: IotReading) => [r.stationId, r]),
+    );
+    const readings: IotReading[] = stations.flatMap((s) => {
+      const r = byId.get(s.id);
+      return r ? [{ ...r, soil_moisture_pct: null, source: "meteomatics" as const }] : [];
+    });
+    return { readings, source: "meteomatics", fetchedAt: body.fetchedAt };
+  } catch (err) {
+    return simulated(stations, (err as Error).message);
+  }
+}
+
+export const fmt = (v: number | null | undefined, digits = 0, unit = "") =>
+  v == null ? "—" : `${v.toFixed(digits)}${unit}`;

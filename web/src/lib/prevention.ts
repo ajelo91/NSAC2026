@@ -25,7 +25,7 @@ export interface AreaConditions {
   meanSlope: number;
   steepShare: number; // fracción de celdas activas con pendiente > 20°
   meanNdvi: number;
-  soilMoisture: number; // mínimo entre SAOCOM/SMAP (modelo) e IoT
+  soilMoisture: number; // GLDAS-2.1 / SMAP (ETL) o modelo paramétrico sin base
   soilSource: string;
   gustKmh: number;
   gustSource: string;
@@ -66,7 +66,7 @@ export function buildPreventionActions(c: AreaConditions): PreventionAction[] {
       severity: "critical",
       triggered: c.soilMoisture < THRESHOLDS.drySoilPct && c.gustKmh > THRESHOLDS.gustKmh,
       evidence: `Humedad ${f(c.soilMoisture, 1)} % (${c.soilSource}) · ráfagas ${f(c.gustKmh)} km/h (${c.gustSource})`,
-      sources: ["CONAE SAOCOM", "NASA SMAP", "Red IoT"],
+      sources: ["NASA GLDAS-2.1 / SMAP", "NASA POWER"],
     },
     {
       id: "fuel",

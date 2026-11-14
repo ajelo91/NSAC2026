@@ -33,7 +33,7 @@ import {
   YEARS,
 } from "@/lib/regions";
 import { envFor } from "@/lib/envModel";
-import { readStation } from "@/lib/iot";
+import { fetchLiveReadings, type LiveReadingsResult } from "@/lib/iot";
 import { anomalyPct, cellValue, monthlyBaseline } from "@/lib/stats";
 import { computeSpreadVectors, dominantBearing, compassLabel } from "@/lib/spread";
 import { buildSusceptibilityGrid } from "@/lib/susceptibility";
@@ -74,7 +74,7 @@ export default function Dashboard() {
   const [alpha, setAlpha] = useState<number | null>(null);
   const [loadingCal, setLoadingCal] = useState(true);
   const [loadingHs, setLoadingHs] = useState(true);
-  const [now, setNow] = useState<Date | null>(null);
+  const [live, setLive] = useState<LiveReadingsResult | null>(null);
   const [methodologyOpen, setMethodologyOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -117,11 +117,16 @@ export default function Dashboard() {
   }, [bbox, selectedYear, excludeNonFire]);
 
   useEffect(() => {
-    // Primera lectura en el próximo tick (evita desajustes de hidratación) y luego cada 30 s
-    const first = setTimeout(() => setNow(new Date()), 0);
-    const id = setInterval(() => setNow(new Date()), 30_000);
+    // Condiciones actuales (Meteomatics vía /api/iot; respaldo simulado). Refresco cada 10 min.
+    let cancelled = false;
+    const load = async () => {
+      const res = await fetchLiveReadings(IOT_STATIONS);
+      if (!cancelled) setLive(res);
+    };
+    void load();
+    const id = setInterval(load, 10 * 60_000);
     return () => {
-      clearTimeout(first);
+      cancelled = true;
       clearInterval(id);
     };
   }, []);
@@ -160,11 +165,13 @@ export default function Dashboard() {
   );
 
   const iot = useMemo(() => {
-    if (!now) return [];
-    return IOT_STATIONS.map((station, i) => ({ station, reading: readStation(station, now, i) })).filter(
-      ({ station }) => inBBox(station.lat, station.lon, bbox),
-    );
-  }, [now, bbox]);
+    if (!live) return [];
+    const byId = new Map(live.readings.map((r) => [r.stationId, r]));
+    return IOT_STATIONS.flatMap((station) => {
+      const reading = byId.get(station.id);
+      return reading && inBBox(station.lat, station.lon, bbox) ? [{ station, reading }] : [];
+    });
+  }, [live, bbox]);
 
   /** Condiciones físicas del escenario: celdas activas del mes pico, o el modelo ambiental si no hay focos. */
   const conditions: AreaConditions | null = useMemo(() => {
@@ -216,7 +223,7 @@ export default function Dashboard() {
       steepShare: sample.filter((x) => x.slope > THRESHOLDS.steepSlopeDeg).length / sample.length,
       meanNdvi: mean("ndvi"),
       soilMoisture: mean("soil"),
-      soilSource: "SAOCOM/SMAP (modelo)",
+      soilSource: calendar.source === "supabase" ? "GLDAS/SMAP" : "modelo paramétrico",
       gustKmh: wind * 1.45,
       gustSource: "ráfaga estimada POWER",
       cloudCover: cell?.avg_cloud_cover ?? 0,
@@ -400,7 +407,7 @@ export default function Dashboard() {
               alpha={alpha}
               calibrationNote={calibrationNote}
             />
-            <PreventionCharterPanel conditions={conditions} scenarioLabel={scenarioLabel} iot={iot} />
+            <PreventionCharterPanel conditions={conditions} scenarioLabel={scenarioLabel} iot={iot} liveNote={live?.note} />
             <AnomalyChart
               yearCells={yearCells}
               baseline={baseline}
@@ -413,8 +420,11 @@ export default function Dashboard() {
 
         <footer className="pb-6 pt-2 text-center text-[11px] text-slate-500">
           PyroSync · NASA Space Apps Challenge 2026 · Datos: NASA FIRMS (MODIS C6.1 + VIIRS 375 m) · Calibración α en
-          Sierras de Córdoba transferida a Patagonia Andina · Variables ambientales: modelo paramétrico (SRTM,
-          SAOCOM/SMAP, POWER, Sentinel-2) · Totales anuales:{" "}
+          Sierras de Córdoba transferida a Patagonia Andina · Variables ambientales:{" "}
+          {calendar?.source === "supabase"
+            ? "SRTM, GLDAS-2.1/SMAP, MODIS NDVI y nubes, NASA POWER"
+            : "modelo paramétrico (sin base de datos)"}{" "}
+          · Totales anuales:{" "}
           {cells.length
             ? `${Math.round(cells.reduce((s, c) => s + cellValue(c, mode), 0)).toLocaleString("es-AR")}`
             : "—"}{" "}
@@ -427,6 +437,7 @@ export default function Dashboard() {
         onClose={() => setMethodologyOpen(false)}
         alpha={alpha}
         dataSource={calendar?.source ?? null}
+        liveSource={live?.source ?? null}
       />
     </>
   );

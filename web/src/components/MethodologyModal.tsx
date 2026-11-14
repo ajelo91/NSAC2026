@@ -5,85 +5,99 @@ import { Bot, X } from "lucide-react";
 import type { DataSource } from "@/types/fire";
 
 interface Props {
+  liveSource?: "meteomatics" | "simulated" | null;
   open: boolean;
   onClose: () => void;
   alpha: number | null;
   dataSource: DataSource | null;
 }
 
-type Status = "Integrado" | "Modelo paramétrico" | "Simulado" | "Protocolo";
+type Status = "Integrado" | "Modelo paramétrico" | "Simulado" | "Protocolo" | "No usado" | "En vivo";
 
-const SOURCES: { agency: string; product: string; variable: string; role: string; status: Status }[] = [
-  {
-    agency: "NASA FIRMS",
-    product: "MODIS C6.1 (MCD14ML, 1 km) + VIIRS 375 m (S-NPP / NOAA-20)",
-    variable: "Focos activos, FRP, confianza",
-    role: "Serie 2000–2026 armonizada en grilla 0.01° (Etapas 1–4)",
-    status: "Integrado",
-  },
-  {
-    agency: "NASA SRTM",
-    product: "DEM 30 m → pendiente agregada a 1 km",
-    variable: "slope_deg",
-    role: "S_pendiente del ISF; regla de cortafuegos > 20°",
-    status: "Modelo paramétrico",
-  },
-  {
-    agency: "CONAE SAOCOM 1A/1B",
-    product: "SAR banda L (humedad de suelo)",
-    variable: "soil_moisture_pct",
-    role: "H_suelo bajo nubes y humo; regla < 15 %",
-    status: "Modelo paramétrico",
-  },
-  {
-    agency: "NASA SMAP",
-    product: "L3 Soil Moisture (9 km)",
-    variable: "soil_moisture_pct",
-    role: "Complemento regional de SAOCOM",
-    status: "Modelo paramétrico",
-  },
-  {
-    agency: "ESA Sentinel-2 MSI",
-    product: "NDVI pre-fuego · severidad dNBR 10 m",
-    variable: "ndvi_pre_fire",
-    role: "Carga de combustible; mapeo post-evento vía Charter",
-    status: "Modelo paramétrico",
-  },
-  {
-    agency: "NASA POWER / MERRA-2",
-    product: "Viento a 10 m (velocidad y azimut)",
-    variable: "wind_speed_kmh, wind_direction_deg",
-    role: "V_viento del ISF; cono de avance probable",
-    status: "Modelo paramétrico",
-  },
-  {
-    agency: "NASA MODIS Cloud Mask",
-    product: "MOD35/MYD35",
-    variable: "cloud_cover_pct",
-    role: "Incertidumbre óptica por mes; criterio Charter",
-    status: "Modelo paramétrico",
-  },
-  {
-    agency: "Red IoT en campo",
-    product: "4 estaciones meteo/suelo (Comarca Andina)",
-    variable: "T, HR, viento, ráfagas, humedad de suelo",
-    role: "Validación local y alertas en tiempo real",
-    status: "Simulado",
-  },
-  {
-    agency: "International Charter",
-    product: "Space & Major Disasters",
-    variable: "—",
-    role: "Pasadas de emergencia SAOCOM + Sentinel-2",
-    status: "Protocolo",
-  },
-];
+/** Estado de cada fuente según de dónde lee la app (Supabase con ETL real vs. mock en memoria). */
+function sources(db: boolean, live: boolean): { agency: string; product: string; variable: string; role: string; status: Status }[] {
+  const etl: Status = db ? "Integrado" : "Modelo paramétrico";
+  return [
+    {
+      agency: "NASA FIRMS",
+      product: "MODIS C6.1 (1 km) + VIIRS S-NPP 375 m",
+      variable: "Focos activos, FRP, confianza",
+      role: "Serie 2000–2026 armonizada en grilla 0.01° (Etapas 1–4)",
+      status: db ? "Integrado" : "Simulado",
+    },
+    {
+      agency: "NASA SRTM",
+      product: "DEM 30 m → pendiente media por celda 0.01° (Earth Engine)",
+      variable: "slope_deg",
+      role: "S_pendiente del ISF; regla de cortafuegos > 20°",
+      status: etl,
+    },
+    {
+      agency: "NASA GLDAS-2.1 + SMAP L3",
+      product: "Humedad de suelo 0–10 cm (27 km) / superficial (9 km, desde 2015)",
+      variable: "soil_moisture_pct",
+      role: "H_suelo; regla de prohibición de quemas < 15 %",
+      status: etl,
+    },
+    {
+      agency: "NASA MODIS MOD13A3",
+      product: "NDVI mensual 1 km (mes anterior a la celda-día)",
+      variable: "ndvi_pre_fire",
+      role: "Carga de combustible; regla de cortafuegos",
+      status: etl,
+    },
+    {
+      agency: "NASA MODIS MOD09GA",
+      product: "Máscara de nubes diaria → % de días nublados por mes",
+      variable: "cloud_cover_pct",
+      role: "Incertidumbre óptica; criterio Charter",
+      status: etl,
+    },
+    {
+      agency: "NASA POWER / MERRA-2",
+      product: "Viento mensual a 10 m (WS10M, WD10M), ~0.5°",
+      variable: "wind_speed_kmh, wind_direction_deg",
+      role: "V_viento del ISF; cono de avance probable",
+      status: etl,
+    },
+    {
+      agency: "Meteomatics",
+      product: "Modelo mix en 4 estaciones de la Comarca Andina (cada 10 min)",
+      variable: "T, HR, viento, ráfagas, índice de humedad de suelo",
+      role: "Condiciones actuales; regla de ráfagas > 35 km/h",
+      status: live ? "En vivo" : "Simulado",
+    },
+    {
+      agency: "CONAE SAOCOM 1A/1B",
+      product: "SAR banda L — mapas de humedad de suelo",
+      variable: "—",
+      role: "Su producto cubre la región pampeana, no la Comarca Andina; se usa como pedido de emergencia vía Charter",
+      status: "No usado",
+    },
+    {
+      agency: "ESA Sentinel-2 MSI",
+      product: "Severidad dNBR 10 m",
+      variable: "—",
+      role: "Mapeo post-evento vía Charter (la serie de NDVI usa MODIS, disponible desde 2000)",
+      status: "Protocolo",
+    },
+    {
+      agency: "International Charter",
+      product: "Space & Major Disasters",
+      variable: "—",
+      role: "Pasadas de emergencia SAOCOM + Sentinel-2",
+      status: "Protocolo",
+    },
+  ];
+}
 
 const STATUS_STYLE: Record<Status, string> = {
   Integrado: "border-emerald-700/60 bg-emerald-500/10 text-emerald-300",
   "Modelo paramétrico": "border-amber-700/60 bg-amber-500/10 text-amber-300",
   Simulado: "border-amber-700/60 bg-amber-500/10 text-amber-300",
   Protocolo: "border-sky-700/60 bg-sky-500/10 text-sky-300",
+  "No usado": "border-slate-700 bg-slate-800 text-slate-400",
+  "En vivo": "border-emerald-700/60 bg-emerald-500/10 text-emerald-300",
 };
 
 function H(props: { children: React.ReactNode }) {
@@ -98,7 +112,7 @@ function Formula(props: { children: React.ReactNode }) {
   );
 }
 
-export default function MethodologyModal({ open, onClose, alpha, dataSource }: Props) {
+export default function MethodologyModal({ open, onClose, alpha, dataSource, liveSource }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -156,7 +170,13 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource }: P
           </li>
           <li>
             <b>Calibración cruzada en Sierras de Córdoba (2012–2024)</b> y transferencia a Patagonia Andina:
-            <Formula>{"α = Σ N_MODIS,grid / Σ N_VIIRS,grid      harmonized_weight = 1 (MODIS) | α (solo VIIRS)"}</Formula>
+            <Formula>
+              {"α = Σ N_MODIS,grid / Σ N_VIIRS,grid\n" +
+                "Fórmula base:  peso = 1 (con MODIS) | α (solo VIIRS)\n" +
+                "Variante B:    peso = 1 (antes de 2012) | α (con VIIRS) | 0 (solo MODIS desde 2012)"}
+            </Formula>
+            La variante usada la define el ETL (<code>--harmonization</code>). Con datos reales FIRMS, la relación
+            armonizada/solo-MODIS en 2012–2024 es 1,67–1,73 con la fórmula base y 1,00–1,10 con la variante B.{" "}
             Córdoba tiene el registro más continuo y con menor nubosidad del país, por eso allí se estima α
             {alpha != null && (
               <>
@@ -175,7 +195,7 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource }: P
         <H>2. Susceptibilidad y propagación en Patagonia Andina</H>
         <Formula>{"ISF = 0,30·S_pendiente + 0,30·(100 − H_suelo) + 0,20·V_viento + 0,20·R_histórico"}</Formula>
         <ul className="list-disc space-y-1 pl-5">
-          <li>S: 0° → 0, ≥ 30° → 100 (SRTM). H: humedad volumétrica del suelo (SAOCOM/SMAP).</li>
+          <li>S: 0° → 0, ≥ 30° → 100 (SRTM). H: humedad volumétrica del suelo (GLDAS-2.1 / SMAP).</li>
           <li>
             V: 0 → 60 km/h normalizado a 0 → 100; R: celdas-día históricas / P95 del área. Clases: Bajo &lt; 40 ≤ Moderado
             &lt; 55 ≤ Alto &lt; 70 ≤ Crítico. <span className="text-slate-400">(Normalizaciones de V, R y clases: supuestos de implementación.)</span>
@@ -193,7 +213,7 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource }: P
         <H>3. Prevención e International Charter</H>
         <ul className="list-disc space-y-1 pl-5">
           <li>Pendiente &gt; 20° + NDVI alto ⇒ fajas cortafuegos en pie de ladera y manejo de combustible en la interfaz.</li>
-          <li>Humedad SAOCOM/IoT &lt; 15 % + ráfagas &gt; 35 km/h ⇒ prohibición de quemas y brigadistas preventivos.</li>
+          <li>Humedad de suelo &lt; 15 % + ráfagas &gt; 35 km/h ⇒ prohibición de quemas y brigadistas preventivos.</li>
           <li>
             Mes &gt; P90 histórico + pendiente crítica + nubosidad ≥ 50 % ⇒ <b>recomendar</b> activar el Charter (pasadas
             SAOCOM y Sentinel-2). La activación formal la realiza un Usuario Autorizado (en Argentina, vía CONAE / SINAGIR).
@@ -213,7 +233,7 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource }: P
               </tr>
             </thead>
             <tbody>
-              {SOURCES.map((s) => (
+              {sources(dataSource === "supabase", liveSource === "meteomatics").map((s) => (
                 <tr key={s.agency} className="border-b border-slate-800/70 align-top">
                   <td className="py-1.5 pr-3 font-medium text-slate-100">{s.agency}</td>
                   <td className="pr-3">{s.product}</td>
@@ -230,11 +250,12 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource }: P
           </table>
         </div>
         <p className="mt-2 text-[12px] text-slate-400">
-          <b>Modelo paramétrico</b>: climatologías regionales aproximadas usadas cuando no hay rasters cargados
-          (columna <code>env_source = &apos;PARAMETRIC&apos;</code>); se reemplazan cargando tablas reales en{" "}
-          <code>etl/aux_data/</code>. <b>Simulado</b>: no hay red IoT desplegada; las lecturas se generan para la demo.
+          <b>Integrado</b>: valores reales procesados por el ETL (<code>etl/env/</code>: Earth Engine + NASA POWER) y
+          servidos desde Supabase (<code>env_source = &apos;AUX&apos;</code>). <b>Modelo paramétrico</b>: climatologías
+          aproximadas usadas solo cuando la app corre sin base de datos. El mapa de susceptibilidad (ISF) todavía usa el
+          modelo paramétrico para las celdas sin focos. Las ráfagas del escenario histórico se estiman como viento medio × 1,45.
           {dataSource === "mock" &&
-            " Esta sesión no tiene Supabase configurado: los focos también son sintéticos, generados en el navegador con el mismo pipeline."}
+            " Esta sesión no tiene Supabase configurado: focos y variables son sintéticos, generados en el navegador."}
         </p>
 
         <H>5. Declaración de uso de IA</H>

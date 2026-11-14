@@ -14,6 +14,7 @@ Uso:
     python etl/upload_supabase.py
     python etl/upload_supabase.py --batch-size 1000 --start-batch 37   # reanudar
     python etl/upload_supabase.py --dry-run                            # validar sin subir
+    python etl/upload_supabase.py --replace                            # vaciar la tabla y recargar
 
 Nota: la carga es append-only. Para recargar desde cero, ejecutá antes en el
 SQL Editor:  TRUNCATE harmonized_hotspots RESTART IDENTITY;
@@ -129,6 +130,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--max-retries", type=int, default=5)
     p.add_argument("--retry-delay", type=float, default=2.0, help="Demora base (s) del backoff exponencial")
     p.add_argument("--dry-run", action="store_true", help="Valida el CSV y los lotes sin conectarse")
+    p.add_argument(
+        "--replace",
+        action="store_true",
+        help="Borra TODAS las filas de la tabla antes de subir (pide confirmación; usar --yes para omitirla)",
+    )
+    p.add_argument("--yes", action="store_true", help="No pedir confirmación con --replace")
     return p.parse_args(argv)
 
 
@@ -146,6 +153,18 @@ def main(argv=None) -> int:
     from supabase import create_client  # import diferido: --dry-run no requiere la librería
 
     client = create_client(url, key)
+
+    if args.replace:
+        existing = client.table(TABLE).select("id", count="exact").limit(1).execute().count or 0
+        print(f"⚠ --replace: se borrarán {existing:,} filas de '{TABLE}' antes de subir {len(records):,} nuevas.")
+        if not args.yes and input("  Escribí BORRAR para confirmar: ").strip() != "BORRAR":
+            print("✗ Cancelado; no se modificó nada.")
+            return 1
+        client.table(TABLE).delete().gte("id", 0).execute()
+        left = client.table(TABLE).select("id", count="exact").limit(1).execute().count or 0
+        if left:
+            sys.exit(f"✗ Quedaron {left} filas sin borrar; revisá permisos y reintentá.")
+        print("  ✔ tabla vaciada")
 
     failed: list[int] = []
     uploaded = 0

@@ -14,7 +14,8 @@ Pipeline (METHODOLOGY.md):
        grid_cell_id = f"{floor(lat*100)}_{floor(lon*100)}"
   4. Calibración cruzada en Sierras de Córdoba (2012–2024)
        alpha = Σ N_MODIS,grid / Σ N_VIIRS,grid   (celdas-día VEGETATION del bbox Córdoba)
-       harmonized_weight = 1.0 si hay MODIS ; alpha si es solo VIIRS
+       harmonized_weight = 1.0 si hay MODIS ; alpha si es solo VIIRS      (--harmonization methodology)
+       o, variante B: 1.0 antes de 2012 ; alpha si hay VIIRS ; 0 si solo MODIS (--harmonization viirs-scaled)
        El MISMO alpha se aplica a Córdoba y a Patagonia Andina.
   5. Enriquecimiento ambiental por celda/mes
        slope_deg, soil_moisture_pct, cloud_cover_pct, wind_speed_kmh,
@@ -64,6 +65,17 @@ STATIONARY_MAX_DAYS_PER_YEAR = 40
 GRID_SCALE = 100
 CALIBRATION_START_YEAR = 2012
 CALIBRATION_END_YEAR = 2024
+
+# Variantes de pesos de la Etapa 4 (--harmonization):
+#   "methodology"  -> METHODOLOGY.md: 1.0 si la celda-día tiene MODIS, alpha si es solo VIIRS.
+#                     Suma los fuegos que solo ve VIIRS; deja un salto residual post-2012.
+#   "viirs-scaled" -> Variante B: antes de VIIRS (20-ene-2012) la serie es MODIS (peso 1.0);
+#                     desde entonces es VIIRS reescalado: alpha en celdas-día con VIIRS y 0.0 en
+#                     las solo-MODIS (se conservan sus detecciones crudas). Por construcción
+#                     alpha·N_VIIRS = N_MODIS en la ventana de calibración => sin salto en 2012.
+HARMONIZATION_MODES = ("methodology", "viirs-scaled")
+HARMONIZATION_DEFAULT = "methodology"
+VIIRS_ERA_START = pd.Timestamp("2012-01-20")
 
 VEGETATION = "VEGETATION"
 VOLCANIC_INDUSTRIAL = "VOLCANIC_INDUSTRIAL"
@@ -198,6 +210,8 @@ class PipelineStats:
     viirs_window_events: int = 0
     env_source: dict = field(default_factory=dict)
     stationary_scale: str = STATIONARY_SCALE_DEFAULT
+    harmonization_mode: str = HARMONIZATION_DEFAULT
+    continuity: dict = field(default_factory=dict)
 
 
 def stage1_quality_filter(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFrame:
@@ -284,8 +298,30 @@ def stage3_grid_aggregation(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFr
     return cells
 
 
-def stage4_transfer_calibration(cells: pd.DataFrame, stats: PipelineStats) -> pd.DataFrame:
-    """alpha se estima SOLO en Córdoba (celdas-día VEGETATION 2012-2024) y se transfiere."""
+def harmonized_weights(cells: pd.DataFrame, alpha: float, mode: str) -> np.ndarray:
+    if mode == "methodology":
+        return np.where(cells["has_modis"], 1.0, alpha)
+    if mode == "viirs-scaled":
+        pre_viirs = (cells["acq_date"] < VIIRS_ERA_START).to_numpy()
+        return np.where(pre_viirs, 1.0, np.where(cells["has_viirs"], alpha, 0.0))
+    raise ValueError(f"modo de armonización inválido: {mode!r} {HARMONIZATION_MODES}")
+
+
+def continuity_ratio(cells: pd.DataFrame, weights: np.ndarray, region: str) -> float:
+    """Serie armonizada / serie solo-MODIS en 2012-2024 (VEGETATION). Ideal = 1.00 (sin salto)."""
+    m = (
+        (cells["region"] == region)
+        & (cells["thermal_type"] == VEGETATION)
+        & cells["year"].between(CALIBRATION_START_YEAR, CALIBRATION_END_YEAR)
+    ).to_numpy()
+    n_modis = int(cells.loc[m, "has_modis"].sum())
+    return float(weights[m].sum() / n_modis) if n_modis else float("nan")
+
+
+def stage4_transfer_calibration(
+    cells: pd.DataFrame, stats: PipelineStats, mode: str = HARMONIZATION_DEFAULT
+) -> pd.DataFrame:
+    """alpha se estima SOLO en Córdoba (celdas-día VEGETATION 2012-2024) y se transfiere a Patagonia."""
     calib = (
         (cells["region"] == CALIBRATION_REGION)
         & (cells["thermal_type"] == VEGETATION)
@@ -299,8 +335,14 @@ def stage4_transfer_calibration(cells: pd.DataFrame, stats: PipelineStats) -> pd
     else:
         alpha = n_modis / n_viirs
     cells = cells.copy()
-    cells["harmonized_weight"] = np.where(cells["has_modis"], 1.0, alpha)
+    cells["harmonized_weight"] = harmonized_weights(cells, alpha, mode)
     stats.alpha, stats.modis_window_events, stats.viirs_window_events = alpha, n_modis, n_viirs
+    stats.harmonization_mode = mode
+    # Diagnóstico de continuidad para AMBAS variantes (para comparar)
+    stats.continuity = {
+        m: {r: continuity_ratio(cells, harmonized_weights(cells, alpha, m), r) for r in REGIONS}
+        for m in HARMONIZATION_MODES
+    }
     return cells
 
 
@@ -443,7 +485,10 @@ def stage5_environment(cells: pd.DataFrame, aux_dir: Path, stats: PipelineStats)
 
 
 def run_pipeline(
-    raw: pd.DataFrame, aux_dir: Path, stationary_scale: str = STATIONARY_SCALE_DEFAULT
+    raw: pd.DataFrame,
+    aux_dir: Path,
+    stationary_scale: str = STATIONARY_SCALE_DEFAULT,
+    harmonization: str = HARMONIZATION_DEFAULT,
 ) -> tuple[pd.DataFrame, PipelineStats]:
     stats = PipelineStats()
     raw = assign_region(raw)
@@ -454,7 +499,8 @@ def run_pipeline(
     print("▶ Etapa 3: grilla unificada 0.01° × día")
     cells = stage3_grid_aggregation(df, stats)
     print(f"▶ Etapa 4: calibración en Córdoba {CALIBRATION_START_YEAR}-{CALIBRATION_END_YEAR} → transferencia a Patagonia")
-    cells = stage4_transfer_calibration(cells, stats)
+    print(f"  variante de pesos: {harmonization}")
+    cells = stage4_transfer_calibration(cells, stats, harmonization)
     print("▶ Etapa 5: variables ambientales por celda/mes")
     cells = stage5_environment(cells, aux_dir, stats)
 
@@ -484,6 +530,12 @@ def print_summary(out: pd.DataFrame, stats: PipelineStats) -> None:
     print(f"   celdas-día MODIS ................... {stats.modis_window_events:>11,}")
     print(f"   celdas-día VIIRS ................... {stats.viirs_window_events:>11,}")
     print(f"   ALPHA (Córdoba) = MODIS / VIIRS .... {stats.alpha:>11.4f}")
+    print(line)
+    print(" CONTINUIDAD 2012-2024: armonizada / solo-MODIS (ideal 1.00 = sin salto en 2012)")
+    for m, by_region in stats.continuity.items():
+        mark = "◀ activa" if m == stats.harmonization_mode else ""
+        vals = "  ".join(f"{r}: {v:.2f}" for r, v in by_region.items())
+        print(f"   {m:<14} {vals}  {mark}")
     print(line)
 
     for region, label in (("PATAGONIA", "PATAGONIA ANDINA (alpha transferido)"), ("CORDOBA", "SIERRAS DE CÓRDOBA")):
@@ -682,6 +734,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--aux-dir", type=Path, default=AUX_DIR)
     p.add_argument("--output", type=Path, default=OUTPUT_PATH)
     p.add_argument(
+        "--harmonization",
+        choices=list(HARMONIZATION_MODES),
+        default=HARMONIZATION_DEFAULT,
+        help="Pesos de la Etapa 4: 'methodology' (1 MODIS / alpha solo-VIIRS) o 'viirs-scaled' (variante B: alpha·VIIRS desde 2012)",
+    )
+    p.add_argument(
         "--stationary-scale",
         choices=["cell", "point"],
         default=STATIONARY_SCALE_DEFAULT,
@@ -695,7 +753,7 @@ def main(argv=None) -> int:
     if args.generate_sample:
         generate_sample(args.raw_dir, seed=args.seed)
     raw = load_raw_directory(args.raw_dir)
-    out, stats = run_pipeline(raw, args.aux_dir, args.stationary_scale)
+    out, stats = run_pipeline(raw, args.aux_dir, args.stationary_scale, args.harmonization)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.output, index=False)
     print_summary(out, stats)

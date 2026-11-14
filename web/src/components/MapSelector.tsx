@@ -29,8 +29,8 @@ interface Props extends Omit<MapViewProps, "show"> {
 const LAYER_DEFS: { key: keyof MapLayers; label: string; hint: string; Icon: typeof Flame }[] = [
   { key: "hotspots", label: "Focos armonizados", hint: "MODIS + VIIRS · grilla 1 km", Icon: Flame },
   { key: "spread", label: "Vectores de propagación", hint: "Avance histórico de eventos", Icon: Route },
-  { key: "susceptibility", label: "Susceptibilidad (ISF)", hint: "Pendiente SRTM + humedad SAOCOM/SMAP", Icon: ShieldAlert },
-  { key: "iot", label: "Red IoT en campo", hint: "4 estaciones (simuladas)", Icon: Radio },
+  { key: "susceptibility", label: "Susceptibilidad (ISF)", hint: "Pendiente + humedad + viento (modelo)", Icon: ShieldAlert },
+  { key: "iot", label: "Estaciones meteorológicas", hint: "4 puntos · Meteomatics en vivo", Icon: Radio },
   { key: "wind", label: "Viento + cono de avance", hint: "NASA POWER · aguas abajo", Icon: Wind },
 ];
 

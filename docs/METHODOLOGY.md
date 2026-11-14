@@ -9,6 +9,9 @@
    Dado que Córdoba posee el registro histórico más continuo y con menor interferencia nubosa, se calcula allí el factor $\alpha$:
    $$\alpha = \frac{\sum_{2012}^{2024} N_{\text{MODIS, grid}}}{\sum_{2012}^{2024} N_{\text{VIIRS, grid}}}$$
    Este coeficiente normaliza el peso de detecciones exclusivas de VIIRS (`harmonized_weight = alpha`) y se transfiere al dominio de **Patagonia Andina** para eliminar el salto artificial post-2012.
+   - **Variante B (`harmonize.py --harmonization viirs-scaled`):** antes del 20-01-2012 la serie es MODIS (peso 1); desde entonces es VIIRS reescalado: `harmonized_weight = alpha` en celdas-día con VIIRS y `0` en las solo-MODIS (se conservan sus detecciones crudas). Por construcción $\alpha \cdot N_{\text{VIIRS}} = N_{\text{MODIS}}$ en la ventana de calibración, por lo que la serie empalma en nivel.
+   - **Diagnóstico de continuidad** (serie armonizada / serie solo-MODIS en 2012–2024, ideal = 1,00), con datos reales FIRMS 2000–2026: fórmula original → Córdoba 1,67 · Patagonia 1,73; variante B → Córdoba 1,00 · Patagonia 1,10 (el 10 % residual mide cuánto difiere la relación MODIS/VIIRS de Patagonia respecto de la de Córdoba).
+   - **Ventana efectiva de calibración:** la fórmula exige el período de observación *simultánea*. El archivo FIRMS VIIRS S-NPP (Collection 2) comienza el **20-11-2012**, por lo que el ETL toma como inicio la primera fecha con datos VIIRS (no el 01-01-2012). Con datos reales: $\alpha = 4.887 / 8.771 = 0{,}5572$ (incluir enero–noviembre de 2012 sin VIIRS lo inflaría a 0,5735).
 
 ## 2. Modelo de Susceptibilidad y Propagación en Patagonia Andina
 Para cada celda de 1 km en Patagonia se calcula un **Índice de Susceptibilidad de Incendio ($ISF \in [0, 100]$)**:

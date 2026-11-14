@@ -18,7 +18,7 @@ import {
 } from "react-leaflet";
 import type { BBox, HotspotRecord } from "@/types/fire";
 import type { IotStation } from "@/lib/regions";
-import type { IotReading } from "@/lib/iot";
+import { fmt, type IotReading } from "@/lib/iot";
 import type { SpreadVector } from "@/lib/spread";
 import type { SusceptibilityCell } from "@/lib/susceptibility";
 import { compassLabel, destination } from "@/lib/spread";
@@ -162,7 +162,7 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
             <Popup>
               <strong>Susceptibilidad: {c.level}</strong> (ISF {c.isf.toFixed(0)}/100)
               <Row k="Pendiente SRTM" v={`${c.slope.toFixed(1)}°`} />
-              <Row k="Humedad suelo SAOCOM/SMAP" v={`${c.soil.toFixed(1)} %`} />
+              <Row k="Humedad de suelo" v={`${c.soil.toFixed(1)} %`} />
               <Row k="Viento POWER" v={`${c.wind.toFixed(1)} km/h`} />
               <Row k="Recurrencia histórica" v={`${c.recurrence} celdas-día`} />
               <p style={{ marginTop: 6, color: "#94a3b8" }}>Variables ambientales: modelo paramétrico.</p>
@@ -206,9 +206,11 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
                   }
                 />
                 <Row k="NDVI previo" v={h.ndvi_pre_fire != null ? h.ndvi_pre_fire.toFixed(2) : "—"} />
-                {h.env_source === "PARAMETRIC" && (
-                  <p style={{ marginTop: 6, color: "#94a3b8" }}>Variables ambientales: modelo paramétrico.</p>
-                )}
+                <p style={{ marginTop: 6, color: "#94a3b8" }}>
+                  {h.env_source === "PARAMETRIC"
+                    ? "Variables ambientales: modelo paramétrico."
+                    : "Variables: SRTM · GLDAS/SMAP · MODIS NDVI y nubes · NASA POWER."}
+                </p>
               </Popup>
             </CircleMarker>
           );
@@ -255,23 +257,28 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
         iot.map(({ station, reading }) => (
           <Marker key={station.id} position={[station.lat, station.lon]} icon={iotIcon}>
             <Tooltip direction="top" offset={[0, -12]}>
-              {station.name} · {reading.temperature_c.toFixed(1)} °C
+              {station.name} · {fmt(reading.temperature_c, 1, " °C")}
             </Tooltip>
             <Popup minWidth={210}>
               <strong>
                 Estación {station.name} ({station.id})
               </strong>
               <div style={{ color: "#fbbf24", fontSize: 10, marginBottom: 4 }}>
-                SIMULADO (demo) · {new Date(reading.timestamp).toLocaleTimeString("es-AR")}
+                {reading.source === "meteomatics" ? "Meteomatics (modelo mix)" : "SIMULADO (sin API)"} ·{" "}
+                {new Date(reading.timestamp).toLocaleTimeString("es-AR")}
               </div>
-              <Row k="Temperatura" v={`${reading.temperature_c.toFixed(1)} °C`} />
-              <Row k="Humedad relativa" v={`${reading.relative_humidity_pct.toFixed(0)} %`} />
+              <Row k="Temperatura" v={fmt(reading.temperature_c, 1, " °C")} />
+              <Row k="Humedad relativa" v={fmt(reading.relative_humidity_pct, 0, " %")} />
               <Row
                 k="Viento"
-                v={`${reading.wind_speed_kmh.toFixed(0)} km/h ${compassLabel(reading.wind_direction_deg)}`}
+                v={`${fmt(reading.wind_speed_kmh, 0, " km/h")} ${reading.wind_direction_deg != null ? compassLabel(reading.wind_direction_deg) : ""}`}
               />
-              <Row k="Ráfagas" v={`${reading.wind_gust_kmh.toFixed(0)} km/h`} />
-              <Row k="Humedad de suelo" v={`${reading.soil_moisture_pct.toFixed(1)} %`} />
+              <Row k="Ráfagas (1 h)" v={fmt(reading.wind_gust_kmh, 0, " km/h")} />
+              {reading.soil_moisture_pct != null ? (
+                <Row k="Humedad de suelo" v={fmt(reading.soil_moisture_pct, 1, " %")} />
+              ) : (
+                <Row k="Índice humedad suelo" v={fmt(reading.soil_moisture_index, 2)} />
+              )}
               <Row k="Altitud" v={`${station.elevation_m} m`} />
             </Popup>
           </Marker>
