@@ -55,3 +55,56 @@ Cada ejecución se registra en `firms_ingestion_runs`, incluyendo conteos por fu
 - FIRMS API Area: https://firms.modaps.eosdis.nasa.gov/api/area/
 - FIRMS latencia y sensores: https://firms.modaps.eosdis.nasa.gov/content/descriptions/FIRMS_VIIRS_Firehotspots.html
 - FIRMS WMS/WMS-Time (mapas, actualización del servicio): https://firms.modaps.eosdis.nasa.gov/mapserver/wms-info/
+
+
+## Fuente complementaria GOES-19 (NOAA ABI L2+ FDCF)
+
+GOES-19 es operado por NOAA. Para PyroSync se propone incorporar el producto **ABI L2+ FDCF (Fire/Hot Spot Characterization, Full Disk)** como una fuente operacional complementaria; esta sección documenta la fuente y el diseño de integración, pero **no significa que el ingestor GOES ya esté implementado ni desplegado**.
+
+### Acceso y costo
+
+- Bucket público oficial: `s3://noaa-goes19/` (región AWS `us-east-1`).
+- No requiere API key, credenciales AWS ni cuenta AWS para lectura pública.
+- Catálogo oficial del bucket y condiciones de uso: https://registry.opendata.aws/noaa-goes/
+- El prefijo del producto FDCF es `ABI-L2-FDCF/`.
+- Ejemplo para listar objetos sin credenciales:
+  ```bash
+  aws s3 ls --no-sign-request s3://noaa-goes19/ABI-L2-FDCF/
+  ```
+- Alternativa para explorar el producto como colección geoespacial: Google Earth Engine, colección `NOAA/GOES/19/FDCF`. Earth Engine requiere configurar su propio acceso/proyecto; no es una API key de GOES y sus cuotas/costos de procesamiento son independientes del acceso público NOAA: https://developers.google.com/earth-engine/datasets/catalog/NOAA_GOES_19_FDCF
+
+El acceso público a los datos NOAA es gratuito. Esto no elimina posibles costos propios de cómputo, transferencia, almacenamiento o procesamiento en infraestructura de terceros. NOAA solicita atribución y no permite insinuar respaldo o afiliación institucional.
+
+### Qué contiene y limitaciones
+
+FDCF entrega capas de máscara de fuego, temperatura, área y potencia radiativa (FRP), además de indicadores de calidad. La colección Full Disk se actualiza con una cadencia nominal de 10 minutos y tiene tamaño de píxel nominal de aproximadamente 2 km; no debe interpretarse como resolución uniforme en todo el disco ni como detección infalible. La producción operacional GOES-19 comenzó el 07-04-2025; los datos anteriores se consideran provisionales.
+
+La máscara distingue clases de detección. Las clases procesadas y saturadas (códigos 10, 11, 30 y 31, incluidas sus variantes filtradas) son una selección inicial razonable para evaluación, pero **también pueden contener falsas alarmas**. Conservar siempre el valor original de máscara y la bandera DQF; no convertir una detección GOES en incendio confirmado. FRP es potencia radiativa, no superficie quemada ni intensidad medida a nivel del suelo.
+
+### Aplicación a las regiones existentes de PyroSync
+
+La integración debe respetar el catálogo de regiones existente, sin crear ni ampliar áreas:
+
+| Región | Bounding box [min lon, min lat, max lon, max lat] | Función |
+|---|---|---|
+| `CORDOBA` — Sierras de Córdoba | `[-65.20, -32.60, -64.00, -30.80]` | Calibración histórica |
+| `PATAGONIA` — Patagonia Andina | `[-72.20, -43.50, -70.80, -41.50]` | Foco operativo |
+
+Estas coordenadas son las cajas rectangulares de respaldo del código (`web/src/lib/regions.ts` y `etl/harmonize.py`). En ejecución, consultar primero las regiones activas de Supabase, como hace la aplicación, y usar el catálogo fallback solo si la consulta no está disponible. Recortar/filtrar los píxeles FDCF con esas cajas exactas; no usar la caja continental de FIRMS para asignar detecciones GOES a las regiones.
+
+### Diseño recomendado para una futura ingesta
+
+1. Crear un ingestor independiente para GOES-19 FDCF que lea el bucket público NOAA y filtre espacialmente cada producto por las regiones activas.
+2. Mantener las detecciones GOES separadas de `live_hotspots` (FIRMS/VIIRS/MODIS) y del histórico armonizado. No mezclar sensores ni convertir píxeles FDCF directamente en registros FIRMS.
+3. Persistir, como mínimo: satélite, instrumento, producto, identificador/nombre del objeto fuente, hora de observación, hora de descarga/ingesta, latitud/longitud, máscara, DQF, temperatura, área, FRP, región y checksum del archivo original.
+4. Guardar el objeto original o una copia verificable junto con su SHA-256 y registrar cada ejecución, conteos, errores y latencia.
+5. Exponer en el mapa una capa GOES diferenciada y mostrar hora de adquisición, hora de ingesta, edad del dato y calidad. Si el feed está atrasado o falla, indicarlo explícitamente.
+6. No deduplicar automáticamente contra VIIRS: las diferencias de resolución, hora de observación y geometría pueden producir detecciones distintas. Cualquier asociación entre sensores requiere una regla espacial-temporal documentada y validada.
+
+GOES-19 aporta mayor frecuencia temporal que los satélites polares, mientras que VIIRS aporta mayor detalle espacial (375 m nominales). Son fuentes complementarias. La cadencia de 10 minutos es de adquisición/producto, no una garantía de disponibilidad instantánea extremo a extremo. El campo de visión y el ángulo de observación también afectan la detección, especialmente hacia los bordes del disco.
+
+### Fuentes oficiales GOES-19
+
+- NOAA Open Data on AWS: https://registry.opendata.aws/noaa-goes/
+- GOES-19 FDCF en Earth Engine Data Catalog (bandas, máscara, cadencia y resolución): https://developers.google.com/earth-engine/datasets/catalog/NOAA_GOES_19_FDCF
+- NOAA GOES-R Product Definition and Users' Guide, Vol. 5 (FHS): https://www.ospo.noaa.gov/resources/documents/PUG/GS%20Series%20416-R-PUG-L2%20Plus-0349%20Vol%205%20v3.0%20final.pdf
