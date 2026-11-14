@@ -1,8 +1,8 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, CircleDashed, Info, Radio, WifiOff } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, Info, MapPinOff, Radio, WifiOff } from "lucide-react";
 import { fmt, type IotReading, type IotSource } from "@/lib/iot";
-import type { IotStation } from "@/lib/regions";
+import { IOT_STATIONS, type IotStation } from "@/lib/regions";
 import {
   buildPreventionActions,
   evaluateCharter,
@@ -150,13 +150,26 @@ export function StationsCard({
           </span>
         )}
       </p>
-      {liveSource !== "meteomatics" || iot.length === 0 ? (
+      {liveSource !== "meteomatics" ? (
         <p className="mt-2 flex items-start gap-2 text-[11.5px] text-slate-400">
           <WifiOff className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden />
           <span>
             Sin datos en vivo{liveNote ? `: ${liveNote}` : ""}. No se muestran ni se evalúan lecturas hasta que Meteomatics
             responda.
           </span>
+        </p>
+      ) : iot.length === 0 ? (
+        <p className="mt-2 flex items-start gap-2 text-[11.5px] text-slate-400">
+          <MapPinOff className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+          <span>
+            Meteomatics está conectado, pero no hay estaciones dentro de esta área. La red actual está en la Comarca Andina
+            ({IOT_STATIONS.map((s) => s.name).join(", ")}): elegí Patagonia Andina para ver sus lecturas.
+          </span>
+        </p>
+      ) : iot.every(({ reading }) => reading.temperature_c == null && reading.wind_speed_kmh == null) ? (
+        <p className="mt-2 flex items-start gap-2 text-[11.5px] text-slate-400">
+          <WifiOff className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+          <span>Meteomatics respondió sin valores para las estaciones. Se reintenta en 10 minutos.</span>
         </p>
       ) : (
         <>
