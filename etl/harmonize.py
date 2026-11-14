@@ -7,7 +7,8 @@ Pipeline (METHODOLOGY.md):
   1. Control de calidad radiométrica
        MODIS confidence >= 30 ; VIIRS confidence IN ('n','h')  (se descarta 'l')
   2. Enmascaramiento geológico/industrial (persistencia estacionaria)
-       coords a 0.001° ; > 8 años distintos  O  > 40 días/año promedio
+       por celda 0.01° (por defecto; --stationary-scale point = coord. 0.001°)
+       > 8 años distintos  O  > 40 días/año promedio
        -> 'VOLCANIC_INDUSTRIAL' ; resto 'VEGETATION'
   3. Grilla unificada 0.01° (~1 km) por (grid_cell_id, acq_date)
        grid_cell_id = f"{floor(lat*100)}_{floor(lon*100)}"
@@ -50,6 +51,12 @@ MODIS_MIN_CONFIDENCE = 30
 VIIRS_ACCEPTED_CONFIDENCE = ("n", "h")
 _VIIRS_CONF_ALIASES = {"l": "l", "low": "l", "n": "n", "nominal": "n", "h": "h", "high": "h"}
 
+# Escala de evaluación de persistencia (Etapa 2, opción A acordada con el equipo):
+#   "cell"  -> celda de 0.01° (~1 km), coherente con la grilla de la Etapa 3. Necesaria para MODIS,
+#              cuya geolocalización varía cientos de metros entre pasadas (a 0.001° una misma fuente
+#              fija nunca repite coordenada y el filtro no detecta nada).
+#   "point" -> criterio original: coordenada redondeada a 0.001° (~110 m).
+STATIONARY_SCALE_DEFAULT = "cell"
 STATIONARY_ROUND_DECIMALS = 3
 STATIONARY_MAX_YEARS = 8
 STATIONARY_MAX_DAYS_PER_YEAR = 40
@@ -190,6 +197,7 @@ class PipelineStats:
     modis_window_events: int = 0
     viirs_window_events: int = 0
     env_source: dict = field(default_factory=dict)
+    stationary_scale: str = STATIONARY_SCALE_DEFAULT
 
 
 def stage1_quality_filter(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFrame:
@@ -206,10 +214,19 @@ def stage1_quality_filter(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFram
     return out
 
 
-def stage2_stationary_mask(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFrame:
-    lat_r = df["lat"].round(STATIONARY_ROUND_DECIMALS)
-    lon_r = df["lon"].round(STATIONARY_ROUND_DECIMALS)
-    point_key = pd.MultiIndex.from_arrays([lat_r, lon_r]).factorize()[0]
+def stage2_stationary_mask(df: pd.DataFrame, stats: PipelineStats, scale: str = STATIONARY_SCALE_DEFAULT) -> pd.DataFrame:
+    """Marca como VOLCANIC_INDUSTRIAL las detecciones de lugares con actividad térmica persistente:
+    > 8 años distintos  O  > 40 días/año en promedio, evaluado por celda 0.01° (scale='cell')
+    o por coordenada 0.001° (scale='point')."""
+    if scale == "cell":
+        k_lat = np.floor(df["lat"].to_numpy() * GRID_SCALE).astype(np.int64)
+        k_lon = np.floor(df["lon"].to_numpy() * GRID_SCALE).astype(np.int64)
+    elif scale == "point":
+        k_lat = df["lat"].round(STATIONARY_ROUND_DECIMALS).to_numpy()
+        k_lon = df["lon"].round(STATIONARY_ROUND_DECIMALS).to_numpy()
+    else:
+        raise ValueError(f"scale inválido: {scale!r} (usar 'cell' o 'point')")
+    point_key = pd.MultiIndex.from_arrays([k_lat, k_lon]).factorize()[0]
     tmp = pd.DataFrame({"pt": point_key, "year": df["acq_date"].dt.year.values, "day": df["acq_date"].values})
     per_point = tmp.groupby("pt").agg(n_years=("year", "nunique"), n_days=("day", "nunique"))
     per_point["days_per_year"] = per_point["n_days"] / per_point["n_years"]
@@ -221,6 +238,7 @@ def stage2_stationary_mask(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFra
     df["thermal_type"] = np.where(is_stationary, VOLCANIC_INDUSTRIAL, VEGETATION)
     stats.stationary_points = int(stationary_pt.sum())
     stats.stationary_detections = int(is_stationary.sum())
+    stats.stationary_scale = scale
     return df
 
 
@@ -424,13 +442,15 @@ def stage5_environment(cells: pd.DataFrame, aux_dir: Path, stats: PipelineStats)
     return cells
 
 
-def run_pipeline(raw: pd.DataFrame, aux_dir: Path) -> tuple[pd.DataFrame, PipelineStats]:
+def run_pipeline(
+    raw: pd.DataFrame, aux_dir: Path, stationary_scale: str = STATIONARY_SCALE_DEFAULT
+) -> tuple[pd.DataFrame, PipelineStats]:
     stats = PipelineStats()
     raw = assign_region(raw)
     print("▶ Etapa 1: control de calidad radiométrica")
     df = stage1_quality_filter(raw, stats)
-    print("▶ Etapa 2: enmascaramiento geológico/industrial")
-    df = stage2_stationary_mask(df, stats)
+    print(f"▶ Etapa 2: enmascaramiento geológico/industrial (persistencia por {'celda 0.01°' if stationary_scale == 'cell' else 'punto 0.001°'})")
+    df = stage2_stationary_mask(df, stats, stationary_scale)
     print("▶ Etapa 3: grilla unificada 0.01° × día")
     cells = stage3_grid_aggregation(df, stats)
     print(f"▶ Etapa 4: calibración en Córdoba {CALIBRATION_START_YEAR}-{CALIBRATION_END_YEAR} → transferencia a Patagonia")
@@ -455,7 +475,8 @@ def print_summary(out: pd.DataFrame, stats: PipelineStats) -> None:
     print(f"\n{line}\n RESUMEN — TRANSFERENCIA DE CALIBRACIÓN CÓRDOBA → PATAGONIA\n{line}")
     print(f" Detecciones en las 2 regiones ........ {total_in:>11,}  {stats.input_by_sensor}")
     print(f" Tras filtro de calidad ............... {total_qc:>11,}  {stats.qc_by_sensor}")
-    print(f" Fuentes estacionarias: {stats.stationary_points} puntos, "
+    unit = "celdas 0.01°" if stats.stationary_scale == "cell" else "puntos 0.001°"
+    print(f" Fuentes estacionarias: {stats.stationary_points} {unit}, "
           f"{stats.stationary_detections:,} detecciones, {stats.stationary_cell_days:,} celdas-día")
     print(f" Celdas-día totales ................... {len(out):>11,}")
     print(line)
@@ -660,6 +681,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--raw-dir", type=Path, default=RAW_DIR)
     p.add_argument("--aux-dir", type=Path, default=AUX_DIR)
     p.add_argument("--output", type=Path, default=OUTPUT_PATH)
+    p.add_argument(
+        "--stationary-scale",
+        choices=["cell", "point"],
+        default=STATIONARY_SCALE_DEFAULT,
+        help="Escala del filtro geológico: 'cell' = celda 0.01° (por defecto), 'point' = coordenada 0.001° (original)",
+    )
     return p.parse_args(argv)
 
 
@@ -668,7 +695,7 @@ def main(argv=None) -> int:
     if args.generate_sample:
         generate_sample(args.raw_dir, seed=args.seed)
     raw = load_raw_directory(args.raw_dir)
-    out, stats = run_pipeline(raw, args.aux_dir)
+    out, stats = run_pipeline(raw, args.aux_dir, args.stationary_scale)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.output, index=False)
     print_summary(out, stats)

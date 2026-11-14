@@ -145,11 +145,11 @@ function buildDataset(): MockDataset {
   const rng = mulberry32(20261114);
   const detections = simulateDetections(rng);
 
-  // Etapa 2: persistencia estacionaria a 0.001°
+  // Etapa 2: persistencia estacionaria por celda 0.01° (opción A, METHODOLOGY.md)
   const pointYears = new Map<string, Set<number>>();
   const pointDays = new Map<string, Set<number>>();
   const keys = detections.map((d) => {
-    const k = `${Math.round(d.lat * 1000)}_${Math.round(d.lon * 1000)}`;
+    const k = `${Math.floor(d.lat * 100)}_${Math.floor(d.lon * 100)}`;
     const year = new Date(d.day * DAY_MS).getUTCFullYear();
     if (!pointYears.has(k)) {
       pointYears.set(k, new Set());

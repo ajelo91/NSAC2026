@@ -148,7 +148,7 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource }: P
             <b>Calidad radiométrica:</b> MODIS <code>confidence ≥ 30</code>; VIIRS <code>confidence ∈ {"{n, h}"}</code>.
           </li>
           <li>
-            <b>Máscara geológica/industrial:</b> coordenadas a 0,001°; &gt; 8 años distintos o &gt; 40 días/año ⇒{" "}
+            <b>Máscara geológica/industrial:</b> celdas de 0,01° con &gt; 8 años distintos o &gt; 40 días/año ⇒{" "}
             <code>VOLCANIC_INDUSTRIAL</code>, excluidas del análisis de biomasa.
           </li>
           <li>

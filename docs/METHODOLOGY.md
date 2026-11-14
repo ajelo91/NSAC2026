@@ -2,7 +2,8 @@
 
 ## 1. Armonización MODIS (1 km) + VIIRS (375 m)
 1. **Filtrado de Calidad:** MODIS `confidence >= 30`; VIIRS `confidence IN ('n', 'h')`.
-2. **Enmascaramiento Geológico/Industrial:** Celdas con recurrencia estacionaria (>8 años o >40 días/año en la misma coordenada a $0.001^\circ$) se etiquetan como `VOLCANIC_INDUSTRIAL` y se excluyen del análisis de biomasa (`VEGETATION`).
+2. **Enmascaramiento Geológico/Industrial:** Celdas de $0.01^\circ$ (~1 km, la misma grilla de la etapa 3) con recurrencia estacionaria (>8 años distintos o >40 días/año en promedio) se etiquetan como `VOLCANIC_INDUSTRIAL` y se excluyen del análisis de biomasa (`VEGETATION`).
+   - *Decisión del equipo (opción A):* el criterio original evaluaba la persistencia en la coordenada redondeada a $0.001^\circ$, pero la geolocalización de MODIS varía cientos de metros entre pasadas y con datos reales (FIRMS MODIS C6.1, 2000–2026) no marcaba ninguna fuente. A escala de celda $0.01^\circ$ marca 17 celdas en Córdoba con 99 % de coincidencia contra las fuentes estáticas de FIRMS (`type = 2`) y ninguna en Patagonia. El criterio original sigue disponible con `harmonize.py --stationary-scale point`.
 3. **Grilla Espacial Unificada (1 km):** Proyección a celdas de $0.01^\circ \times 0.01^\circ$ agrupando por `(grid_cell_id, acq_date)`. Múltiples sub-píxeles VIIRS colapsan en 1 celda-día activa.
 4. **Calibración Cruzada en Sierras de Córdoba (2012–2024):**
    Dado que Córdoba posee el registro histórico más continuo y con menor interferencia nubosa, se calcula allí el factor $\alpha$:
