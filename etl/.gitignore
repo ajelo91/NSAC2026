@@ -1,0 +1,4 @@
+.env
+raw_data/*.csv
+harmonized_output.csv
+__pycache__/
