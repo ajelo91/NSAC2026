@@ -35,6 +35,13 @@ function sources(db: boolean, live: boolean, fires: boolean): { agency: string; 
       status: fires ? "En vivo" : "Sin conexión",
     },
     {
+      agency: "NOAA GOES-19 (vía NASA GIBS)",
+      product: "ABI GeoColor y Fire Temperature RGB, cada 10 min (~1–2 km)",
+      variable: "Humo, nubes y señal térmica",
+      role: "Capa de imagen y animación de las últimas 6 h (solo visualización)",
+      status: "En vivo",
+    },
+    {
       agency: "NASA SRTM",
       product: "DEM 30 m → pendiente media por celda 0.01° (Earth Engine)",
       variable: "slope_deg",

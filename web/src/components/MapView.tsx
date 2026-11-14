@@ -1,10 +1,13 @@
 "use client";
 
 import "leaflet/dist/leaflet.css";
-import { Fragment, useEffect, useMemo } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import L from "leaflet";
+import type { FeatureCollection } from "geojson";
 import {
   CircleMarker,
+  GeoJSON,
+  Pane,
   LayersControl,
   MapContainer,
   Marker,
@@ -24,6 +27,14 @@ import type { SusceptibilityCell } from "@/lib/susceptibility";
 import { compassLabel, destination } from "@/lib/spread";
 import { interpolate, RISK_COLORS, YLORRD } from "@/lib/colors";
 import { ageHours, ageLabel, localTime, type LiveFire } from "@/lib/firmsLive";
+import { GOES_MAX_NATIVE_ZOOM, goesTileUrl, type GoesProduct } from "@/lib/goes";
+
+export interface GoesOverlay {
+  product: GoesProduct;
+  times: string[];
+  index: number;
+  opacity: number;
+}
 
 export interface WindOverlay {
   origin: [number, number];
@@ -41,7 +52,17 @@ export interface MapViewProps {
   iot: { station: IotStation; reading: IotReading }[];
   wind: WindOverlay | null;
   liveFires: LiveFire[];
-  show: { live: boolean; hotspots: boolean; spread: boolean; susceptibility: boolean; iot: boolean; wind: boolean };
+  goes: GoesOverlay | null;
+  show: {
+    live: boolean;
+    hotspots: boolean;
+    spread: boolean;
+    susceptibility: boolean;
+    iot: boolean;
+    wind: boolean;
+    park: boolean;
+    goes: boolean;
+  };
 }
 
 /** Color por antigüedad de la detección en tiempo casi real (rojo = última hora). */
@@ -94,7 +115,66 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-export default function MapView({ bbox, hotspots, spread, susceptibility, iot, wind, liveFires, show }: MapViewProps) {
+/** Formato grados-minutos-segundos para radio / GPS de brigadas. */
+function dms(v: number, pos: string, neg: string): string {
+  const a = Math.abs(v);
+  const d = Math.floor(a);
+  const m = Math.floor((a - d) * 60);
+  const s = ((a - d) * 60 - m) * 60;
+  return `${d}°${String(m).padStart(2, "0")}'${s.toFixed(1).padStart(4, "0")}"${v < 0 ? neg : pos}`;
+}
+
+/** Coordenadas del punto con botón para copiar (decimal) y formato GMS. */
+function Coords({ lat, lon, note }: { lat: number; lon: number; note?: string }) {
+  const [copied, setCopied] = useState(false);
+  const dec = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  return (
+    <div style={{ margin: "4px 0 6px", padding: "4px 6px", borderRadius: 6, background: "#0f172a", border: "1px solid #334155" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontFamily: "ui-monospace, monospace", color: "#e2e8f0" }}>{dec}</span>
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard?.writeText(dec).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            });
+          }}
+          style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, border: "1px solid #475569", color: copied ? "#6ee7b7" : "#cbd5e1", background: "transparent", cursor: "pointer" }}
+          aria-label="Copiar coordenadas"
+        >
+          {copied ? "Copiado" : "Copiar"}
+        </button>
+      </div>
+      <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, color: "#94a3b8" }}>
+        {dms(lat, "N", "S")} {dms(lon, "E", "O")}
+      </div>
+      {note && <div style={{ fontSize: 10, color: "#64748b" }}>{note}</div>}
+    </div>
+  );
+}
+
+/** Límites de áreas protegidas (PN Los Alerces), GeoJSON estático en /data. */
+function useProtectedAreas(enabled: boolean): FeatureCollection | null {
+  const [fc, setFc] = useState<FeatureCollection | null>(null);
+  useEffect(() => {
+    if (!enabled || fc) return;
+    let cancelled = false;
+    fetch("/data/protected_areas.geojson")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!cancelled && j) setFc(j);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, fc]);
+  return fc;
+}
+
+export default function MapView({ bbox, hotspots, spread, susceptibility, iot, wind, liveFires, goes, show }: MapViewProps) {
+  const parks = useProtectedAreas(show.park);
   const drawn = useMemo(
     () =>
       hotspots.length > MAX_DRAWN_HOTSPOTS
@@ -117,6 +197,41 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
   return (
     <MapContainer center={center} zoom={8} preferCanvas className="h-full w-full" scrollWheelZoom>
       <FitBounds bbox={bbox} />
+
+      {show.goes && goes && goes.times.length > 0 && (
+        <Pane name="goes" style={{ zIndex: 350 }}>
+          {goes.times.map((t, i) => (
+            <TileLayer
+              key={`${goes.product}-${t}`}
+              url={goesTileUrl(goes.product, t)}
+              maxNativeZoom={GOES_MAX_NATIVE_ZOOM}
+              opacity={i === goes.index ? goes.opacity : 0}
+              attribution="GOES-19 ABI · NOAA / NASA GIBS"
+            />
+          ))}
+        </Pane>
+      )}
+
+      {show.park && parks && (
+        <GeoJSON
+          key="parks"
+          data={parks}
+          style={(f) =>
+            f?.properties?.kind === "reserve"
+              ? { color: "#a3e635", weight: 1.6, dashArray: "2 4", fillColor: "#a3e635", fillOpacity: 0.04 }
+              : { color: "#4ade80", weight: 2.2, dashArray: "6 4", fillColor: "#22c55e", fillOpacity: 0.07 }
+          }
+          onEachFeature={(f, layer) => {
+            const p = (f.properties ?? {}) as Record<string, string | number>;
+            layer.bindTooltip(String(p.name ?? "Área protegida"), { sticky: true });
+            layer.bindPopup(
+              `<strong>${p.name}</strong><br/><span style="color:#94a3b8">${p.designation ?? ""}</span><br/>` +
+                `Superficie ≈ ${Number(p.area_km2 ?? 0).toLocaleString("es-AR")} km² · ${p.operator ?? ""}<br/>` +
+                `<span style="color:#64748b;font-size:10px">${p.source ?? ""}</span>`,
+            );
+          }}
+        />
+      )}
       <LayersControl position="bottomleft">
         {CARTO_API_KEY ? (
           <LayersControl.BaseLayer checked name="Oscuro (CARTO)">
@@ -200,6 +315,7 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
                 <strong>
                   {h.acq_date} · celda {h.grid_cell_id}
                 </strong>
+                <Coords lat={h.lat} lon={h.lon} note="Centro de la celda 0,01° (~1 km) de la grilla armonizada" />
                 <Row k="Sensor" v={h.sensor_source} />
                 <Row k="Peso armonizado" v={h.harmonized_weight.toFixed(3)} />
                 <Row k="Detecciones crudas" v={String(h.raw_detections_count)} />
@@ -277,6 +393,7 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
             >
               <Popup>
                 <strong>Foco en tiempo casi real · {ageLabel(h)}</strong>
+                <Coords lat={f.lat} lon={f.lon} note={`Centro del píxel ${f.instrument === "MODIS" ? "1 km" : "375 m"} (FIRMS)`} />
                 <Row k="Detectado" v={`${localTime(f.acq_datetime)} (hora AR)`} />
                 <Row k="Satélite" v={`${f.instrument} ${f.satellite}`} />
                 <Row k="Resolución" v={f.instrument === "MODIS" ? "1 km" : "375 m"} />
@@ -301,6 +418,7 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
               <strong>
                 Estación {station.name} ({station.id})
               </strong>
+              <Coords lat={station.lat} lon={station.lon} />
               <div style={{ color: "#fbbf24", fontSize: 10, marginBottom: 4 }}>
                 Meteomatics (modelo mix) ·{" "}
                 {new Date(reading.timestamp).toLocaleTimeString("es-AR")}

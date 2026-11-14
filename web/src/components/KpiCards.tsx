@@ -2,9 +2,12 @@
 
 import { Activity, CalendarRange, Scale, TrendingUp } from "lucide-react";
 import { formatNumber, formatSigned } from "@/lib/stats";
+import { MONTHS_LONG } from "@/lib/regions";
 
 interface Props {
   selectedYear: number;
+  /** Mes filtrado (1–12) o null = todo el año */
+  month?: number | null;
   total: number;
   rawTotal: number;
   peakMonthLabel: string;
@@ -28,23 +31,24 @@ function Card(props: { icon: React.ReactNode; label: string; value: string; sub:
 }
 
 export default function KpiCards(p: Props) {
+  const period = p.month ? `${MONTHS_LONG[p.month - 1].toLowerCase()} ${p.selectedYear}` : String(p.selectedYear);
   return (
     <div className="grid grid-cols-2 gap-3">
       <Card
         icon={<Activity className="h-3.5 w-3.5" aria-hidden />}
-        label={`Eventos armonizados ${p.selectedYear}`}
+        label={`Eventos armonizados ${period}`}
         value={formatNumber(p.total, 1)}
         sub={`${formatNumber(p.rawTotal)} detecciones crudas`}
       />
       <Card
         icon={<CalendarRange className="h-3.5 w-3.5" aria-hidden />}
-        label="Mes pico"
+        label={p.month ? "Día pico del mes" : "Mes pico"}
         value={p.peakMonthLabel}
-        sub={`${formatNumber(p.peakValue, 1)} eventos en el mes`}
+        sub={`${formatNumber(p.peakValue, 1)} eventos ${p.month ? "ese día" : "en el mes"}`}
       />
       <Card
         icon={<TrendingUp className="h-3.5 w-3.5" aria-hidden />}
-        label="Anomalía vs. mediana"
+        label={p.month ? `Anomalía de ${MONTHS_LONG[p.month - 1].toLowerCase()} vs. mediana` : "Anomalía vs. mediana"}
         value={`${formatSigned(p.anomaly)} %`}
         sub="(E − P50) / (P50 + 1), base 2001–2020"
         tone={p.anomaly > 0 ? "text-rose-300" : "text-emerald-300"}

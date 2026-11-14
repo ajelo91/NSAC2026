@@ -16,7 +16,7 @@ import {
   Search,
 } from "lucide-react";
 import type { BBox, DataSource, Region } from "@/types/fire";
-import { FIRST_YEAR, LAST_YEAR, YEARS } from "@/lib/regions";
+import { FIRST_YEAR, LAST_YEAR, MONTHS_LONG, YEARS } from "@/lib/regions";
 import { CustomBBoxForm } from "./AreaForms";
 
 interface Props {
@@ -29,6 +29,8 @@ interface Props {
   onSelectRegion: (key: string) => void;
   onCustomArea: (bbox: BBox, label?: string) => void;
   onYear: (y: number) => void;
+  month: number | null;
+  onMonth: (m: number | null) => void;
   onOpenMethodology: () => void;
 }
 
@@ -75,6 +77,24 @@ export default function TopBar(p: Props) {
         <RegionPicker {...p} />
         <PlaceSearch onPick={p.onCustomArea} />
         <YearStepper year={p.year} onYear={p.onYear} />
+        <select
+          value={p.month ?? 0}
+          onChange={(e) => p.onMonth(+e.target.value || null)}
+          className={`rounded-lg border bg-slate-900 px-2 py-1.5 text-sm outline-none ${
+            p.month ? "border-orange-600/70 text-orange-200" : "border-slate-800 text-slate-200"
+          }`}
+          aria-label="Mes"
+          title="Filtrar mapa, escenario y Charter por mes"
+        >
+          <option value={0} className="bg-slate-900">
+            Todo el año
+          </option>
+          {MONTHS_LONG.map((m, i) => (
+            <option key={m} value={i + 1} className="bg-slate-900">
+              {m}
+            </option>
+          ))}
+        </select>
 
         <div className="ml-auto flex items-center gap-1.5">
           <span

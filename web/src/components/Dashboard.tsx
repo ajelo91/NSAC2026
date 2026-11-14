@@ -61,9 +61,11 @@ export default function Dashboard() {
   const [mode, setMode] = useState<SeriesMode>("harmonized");
   const [palette, setPalette] = useState<Palette>("viridis");
   const [selectedYear, setSelectedYear] = useState(DEFAULT_YEAR);
+  /** Mes filtrado (1–12) o null = todo el año */
+  const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
   const [section, setSection] = useState<Section>("resumen");
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [layers, setLayers] = useState<MapLayers>({ live: true, hotspots: true, spread: true, susceptibility: false, iot: true, wind: true });
+  const [layers, setLayers] = useState<MapLayers>({ live: true, park: true, goes: false, hotspots: true, spread: true, susceptibility: false, iot: true, wind: true });
   const [calendar, setCalendar] = useState<CalendarResult | null>(null);
   const [hotspots, setHotspots] = useState<HotspotsResult | null>(null);
   const [recurrence, setRecurrence] = useState<RecurrenceCell[]>([]);
@@ -96,6 +98,7 @@ export default function Dashboard() {
         if (!url.year && r.defaultYear) setSelectedYear(r.defaultYear);
       }
       if (url.year) setSelectedYear(url.year);
+      if (url.month) setSelectedMonth(url.month);
       if (url.section) setSection(url.section);
       if (url.mode) setMode(url.mode);
       setReady(true);
@@ -112,10 +115,11 @@ export default function Dashboard() {
       bbox: regionKey === CUSTOM_REGION ? bbox : undefined,
       place: customLabel ?? undefined,
       year: selectedYear,
+      month: selectedMonth ?? undefined,
       section,
       mode,
     });
-  }, [ready, regionKey, bbox, customLabel, selectedYear, section, mode]);
+  }, [ready, regionKey, bbox, customLabel, selectedYear, selectedMonth, section, mode]);
 
   // ---------------------------------------------------------------- datos
   useEffect(() => {
@@ -200,6 +204,7 @@ export default function Dashboard() {
   const hasAnyData = cells.some((c) => c.active_cells > 0);
 
   const scenarioMonth = useMemo(() => {
+    if (selectedMonth) return selectedMonth;
     let best = 0;
     let month = 0;
     for (const c of yearCells) {
@@ -211,7 +216,7 @@ export default function Dashboard() {
     if (month) return month;
     const peak = baselineH.reduce((a, b) => (b.p50 > a.p50 ? b : a), baselineH[0]);
     return peak?.p50 > 0 ? peak.month : 1;
-  }, [yearCells, baselineH]);
+  }, [yearCells, baselineH, selectedMonth]);
   const scenarioLabel = `${MONTHS_LONG[scenarioMonth - 1]} ${selectedYear}`;
 
   useEffect(() => {
@@ -227,7 +232,12 @@ export default function Dashboard() {
 
   const rows = useMemo(() => hotspots?.rows ?? [], [hotspots]);
   const vegRows = useMemo(() => rows.filter((r) => r.thermal_type === "VEGETATION"), [rows]);
-  const spread = useMemo(() => computeSpreadVectors(rows), [rows]);
+  /** Lo que se dibuja en el mapa: todo el año o solo el mes filtrado */
+  const mapRows = useMemo(
+    () => (selectedMonth ? rows.filter((r) => Number(r.acq_date.slice(5, 7)) === selectedMonth) : rows),
+    [rows, selectedMonth],
+  );
+  const spread = useMemo(() => computeSpreadVectors(mapRows), [mapRows]);
   const susceptibility = useMemo(
     () => buildSusceptibilityFromGrid(envGrid, recurrence, RECURRENCE_CELL_DEG),
     [envGrid, recurrence],
@@ -344,6 +354,27 @@ export default function Dashboard() {
   }, [conditions, vegRows, scenarioMonth, bbox, scenarioLabel]);
 
   const kpi = useMemo(() => {
+    if (selectedMonth) {
+      const cell = yearCells.find((c) => c.month === selectedMonth);
+      const byDay = new Map<string, number>();
+      for (const r of mapRows) if (r.thermal_type === "VEGETATION") byDay.set(r.acq_date, (byDay.get(r.acq_date) ?? 0) + r.harmonized_weight);
+      let peakDay = "—";
+      let peakValue = 0;
+      byDay.forEach((v, d) => {
+        if (v > peakValue) {
+          peakValue = v;
+          peakDay = `${Number(d.slice(8, 10))} ${MONTHS_LONG[selectedMonth - 1].slice(0, 3).toLowerCase()}`;
+        }
+      });
+      const total = cell?.harmonized_events ?? 0;
+      return {
+        total,
+        rawTotal: cell?.raw_events ?? 0,
+        peakMonthLabel: peakDay,
+        peakValue,
+        anomaly: anomalyPct(total, baselineH[selectedMonth - 1]?.p50 ?? 0),
+      };
+    }
     const total = yearCells.reduce((s, c) => s + c.harmonized_events, 0);
     const rawTotal = yearCells.reduce((s, c) => s + c.raw_events, 0);
     const peak = yearCells.reduce((a, c) => (c.harmonized_events > (a?.harmonized_events ?? -1) ? c : a), yearCells[0]);
@@ -355,7 +386,7 @@ export default function Dashboard() {
       peakValue: peak?.harmonized_events ?? 0,
       anomaly: anomalyPct(total, p50Total),
     };
-  }, [yearCells, baselineH]);
+  }, [yearCells, baselineH, selectedMonth, mapRows]);
 
   const bearing = dominantBearing(spread);
   const liveSummaryText = useMemo(() => {
@@ -423,6 +454,8 @@ export default function Dashboard() {
         onSelectRegion={selectRegion}
         onCustomArea={customArea}
         onYear={setSelectedYear}
+        month={selectedMonth}
+        onMonth={setSelectedMonth}
         onOpenMethodology={() => setMethodologyOpen(true)}
       />
 
@@ -453,6 +486,7 @@ export default function Dashboard() {
               conditions={conditions}
               kpi={kpi}
               selectedYear={selectedYear}
+              month={selectedMonth}
               alpha={alpha}
               calibrationNote="Calibrado en Córdoba nov-2012 a 2024"
               iot={iot}
@@ -488,10 +522,22 @@ export default function Dashboard() {
                 onExcludeNonFireChange={setExcludeNonFire}
                 selectedYear={selectedYear}
                 onSelectYear={setSelectedYear}
+                selectedMonth={selectedMonth}
+                onSelectMonth={(y, m) => {
+                  setSelectedYear(y);
+                  setSelectedMonth(m);
+                }}
                 alpha={alpha}
                 loading={loadingCal}
               />
-              <AnomalyChart yearCells={yearCells} baseline={baseline} mode={mode} selectedYear={selectedYear} regionLabel={regionLabel} />
+              <details className="group space-y-2">
+                <summary className="cursor-pointer list-none rounded-xl border border-slate-800 bg-slate-900 px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-800/60 [&::-webkit-details-marker]:hidden">
+                  <span className="mr-1 inline-block transition group-open:rotate-90">▸</span> Anomalía mensual {selectedYear} vs. 2001–2020
+                </summary>
+                <div className="mt-2">
+                  <AnomalyChart yearCells={yearCells} baseline={baseline} mode={mode} selectedYear={selectedYear} regionLabel={regionLabel} />
+                </div>
+              </details>
             </div>
           )}
           {section === "charter" && <CharterPanel conditions={conditions} scenarioLabel={scenarioLabel} emptyMessage={emptyMessage} />}
@@ -519,14 +565,14 @@ export default function Dashboard() {
               bearing != null ? `Avance dominante hacia ${compassLabel(bearing)} (${bearing.toFixed(0)}°) en ${spread.length} eventos` : undefined
             }
             bbox={bbox}
-            hotspots={rows}
+            hotspots={mapRows}
             spread={spread}
             susceptibility={susceptibility}
             iot={iot}
             wind={windOverlay}
             layers={layers}
             onToggleLayer={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
-            hotspotCount={rows.length}
+            hotspotCount={mapRows.length}
             truncated={hotspots?.truncated ?? false}
             loading={loadingHs}
             isfLabel={isfLabel}

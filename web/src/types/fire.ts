@@ -129,4 +129,6 @@ export interface MapLayers {
   susceptibility: boolean;
   iot: boolean;
   wind: boolean;
+  park: boolean;
+  goes: boolean;
 }

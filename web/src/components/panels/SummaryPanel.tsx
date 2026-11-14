@@ -17,6 +17,7 @@ interface Props {
   conditions: AreaConditions | null;
   kpi: { total: number; rawTotal: number; peakMonthLabel: string; peakValue: number; anomaly: number };
   selectedYear: number;
+  month: number | null;
   alpha: number | null;
   calibrationNote: string;
   iot: { station: IotStation; reading: IotReading }[];
@@ -68,6 +69,7 @@ export default function SummaryPanel(p: Props) {
 
       <KpiCards
         selectedYear={p.selectedYear}
+        month={p.month}
         total={p.kpi.total}
         rawTotal={p.kpi.rawTotal}
         peakMonthLabel={p.kpi.peakMonthLabel}

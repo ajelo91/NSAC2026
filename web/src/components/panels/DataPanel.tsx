@@ -22,6 +22,8 @@ export default function DataPanel(p: Props) {
   const rows: { label: string; source: string; ok: boolean }[] = [
     { label: "Focos de calor 2000–2026 (calendario)", source: "NASA FIRMS MODIS C6.1 + VIIRS S-NPP → NOAA-20 (desde 02-11-2026), armonizados", ok: p.dataSource != null },
     { label: "Focos en tiempo casi real (72 h)", source: "NASA FIRMS NRT · VIIRS NOAA-20 + NOAA-21 + MODIS, sin armonizar", ok: p.liveFiresOk },
+    { label: "Imagen GOES-19 (humo y nubes, cada 10 min)", source: "NOAA GOES-19 ABI GeoColor / Fire Temperature vía NASA GIBS", ok: true },
+    { label: "Áreas protegidas (PN Los Alerces, RN Los Alerces, PN Lago Puelo)", source: "APN · OpenStreetMap (ODbL), simplificado ~50 m", ok: true },
     { label: "Pendiente del terreno", source: "NASA SRTM 30 m", ok: p.dataSource != null },
     { label: "Humedad de suelo", source: "NASA GLDAS-2.1 / SMAP", ok: p.dataSource != null },
     { label: "Vegetación (NDVI) y nubosidad", source: "NASA MODIS MOD13A3 / MOD09GA", ok: p.dataSource != null },

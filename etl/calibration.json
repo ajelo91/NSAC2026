@@ -1,19 +1,23 @@
 {
-  "alpha": 0.5571770607684414,
-  "alpha_n20": 0.5571770607684414,
-  "beta_snpp_n20": null,
+  "alpha": 0.5573433755563163,
+  "alpha_n20": 0.5690821121388299,
+  "beta_snpp_n20": 1.021061946902655,
   "calibration_window": [
     "2012-11-20",
     "2024-12-31"
   ],
   "n20_window": [
-    "",
-    ""
+    "2018-04-05",
+    "2026-11-01"
   ],
   "snpp_end": "2026-11-01",
   "viirs_reference": {
-    "SNPP": 45105
+    "SNPP": 45105,
+    "N20": 10
   },
-  "excluded_viirs": {},
+  "excluded_viirs": {
+    "N20": 28946,
+    "N21": 13503
+  },
   "harmonization": "methodology"
 }

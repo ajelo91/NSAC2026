@@ -19,6 +19,8 @@ interface Props {
   onExcludeNonFireChange: (v: boolean) => void;
   selectedYear: number;
   onSelectYear: (y: number) => void;
+  selectedMonth: number | null;
+  onSelectMonth: (y: number, m: number) => void;
   alpha: number | null;
   loading: boolean;
 }
@@ -33,7 +35,7 @@ function compact(v: number): string {
 export default function BurnCalendar(props: Props) {
   const { cells, mode, palette, selectedYear } = props;
 
-  const { byYear, max, annual, maxAnnual } = useMemo(() => {
+  const { byYear, max, annual } = useMemo(() => {
     const byYear = new Map<number, CalendarCell[]>();
     let max = 0;
     const annual = new Map<number, number>();
@@ -51,32 +53,16 @@ export default function BurnCalendar(props: Props) {
   // Escala raíz cuadrada: preserva contraste entre años normales y años extremos
   const scale = (v: number) => (max > 0 ? Math.sqrt(v / max) : 0);
   const seg = (active: boolean) =>
-    `rounded-md px-2.5 py-1 text-xs transition ${active ? "bg-slate-700 text-slate-50" : "text-slate-400 hover:text-slate-200"}`;
+    `rounded px-2 py-0.5 text-[11px] transition ${active ? "bg-slate-700 text-slate-50" : "text-slate-400 hover:text-slate-200"}`;
 
   return (
     <section className="rounded-xl border border-slate-800 bg-slate-900">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-800 px-4 py-3">
-        <div>
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-            <CalendarDays className="h-4 w-4 text-orange-400" aria-hidden /> Calendario de Actividad de Quemas 2000–2026
+      <div className="space-y-2 border-b border-slate-800 px-3 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-slate-100">
+            <CalendarDays className="h-4 w-4 text-orange-400" aria-hidden /> Calendario de quemas
           </h2>
-          <p className="mt-0.5 text-[11px] text-slate-400">
-            {mode === "harmonized"
-              ? `Σ harmonized_weight por mes · α = ${props.alpha?.toFixed(3) ?? "—"} calibrado en Sierras de Córdoba (nov-2012 a 2024)`
-              : "Σ detecciones crudas MODIS + VIIRS sin armonizar (observar el salto artificial de 2012)"}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-lg border border-slate-800 bg-slate-950 p-0.5" role="group" aria-label="Serie">
-            <button type="button" className={seg(mode === "harmonized")} aria-pressed={mode === "harmonized"} onClick={() => props.onModeChange("harmonized")}>
-              Serie Armonizada (Calibrada en Córdoba)
-            </button>
-            <button type="button" className={seg(mode === "raw")} aria-pressed={mode === "raw"} onClick={() => props.onModeChange("raw")}>
-              Datos Crudos Sin Armonizar
-            </button>
-          </div>
-          <div className="flex rounded-lg border border-slate-800 bg-slate-950 p-0.5" role="group" aria-label="Paleta">
+          <div className="flex rounded-md border border-slate-800 bg-slate-950 p-0.5" role="group" aria-label="Paleta">
             <button type="button" className={seg(palette === "viridis")} aria-pressed={palette === "viridis"} onClick={() => props.onPaletteChange("viridis")}>
               Viridis
             </button>
@@ -84,35 +70,43 @@ export default function BurnCalendar(props: Props) {
               YlOrRd
             </button>
           </div>
-          <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1 text-xs text-slate-300">
-            <span className="relative inline-flex">
-              <input
-                type="checkbox"
-                role="switch"
-                className="peer sr-only"
-                checked={props.excludeNonFire}
-                onChange={(e) => props.onExcludeNonFireChange(e.target.checked)}
-              />
-              <span className="h-4 w-7 rounded-full bg-slate-700 transition peer-checked:bg-orange-600" />
-              <span className="absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white transition peer-checked:translate-x-3" />
-            </span>
-            <Mountain className="h-3.5 w-3.5 text-slate-400" aria-hidden />
-            Ocultar anomalías estacionarias (volcanes / industria)
-          </label>
         </div>
+        <div className="flex rounded-md border border-slate-800 bg-slate-950 p-0.5" role="group" aria-label="Serie">
+          <button type="button" className={`flex-1 ${seg(mode === "harmonized")}`} aria-pressed={mode === "harmonized"} onClick={() => props.onModeChange("harmonized")}>
+            Armonizada (α Córdoba)
+          </button>
+          <button type="button" className={`flex-1 ${seg(mode === "raw")}`} aria-pressed={mode === "raw"} onClick={() => props.onModeChange("raw")}>
+            Cruda (sin armonizar)
+          </button>
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-[11px] text-slate-300">
+          <input
+            type="checkbox"
+            checked={props.excludeNonFire}
+            onChange={(e) => props.onExcludeNonFireChange(e.target.checked)}
+            className="h-3.5 w-3.5 accent-orange-500"
+          />
+          <Mountain className="h-3.5 w-3.5 text-slate-400" aria-hidden />
+          Ocultar fuentes fijas (volcanes / industria)
+        </label>
+        <p className="text-[10.5px] leading-snug text-slate-500">
+          {mode === "harmonized"
+            ? `Σ peso armonizado por mes · α = ${props.alpha?.toFixed(3) ?? "—"}.`
+            : "Σ detecciones crudas: observá el salto artificial desde 2012."}{" "}
+          Tocá una celda para ver ese mes en el mapa.
+        </p>
       </div>
 
-      <div className={`overflow-x-auto px-4 py-3 ${props.loading ? "opacity-50" : ""}`}>
-        <table className="w-full min-w-[640px] border-separate" style={{ borderSpacing: 2 }}>
+      <div className={`px-2 py-2 ${props.loading ? "opacity-50" : ""}`}>
+        <table className="w-full table-fixed border-separate" style={{ borderSpacing: 1.5 }}>
           <thead>
             <tr>
-              <th className="w-14 text-left text-[10.5px] font-normal text-slate-500">Año</th>
+              <th className="w-9" />
               {MONTHS_SHORT.map((m) => (
-                <th key={m} className="text-center text-[10.5px] font-normal text-slate-500">
-                  {m}
+                <th key={m} className="text-center text-[9px] font-normal text-slate-500">
+                  {m.charAt(0)}
                 </th>
               ))}
-              <th className="w-24 pl-2 text-left text-[10.5px] font-normal text-slate-500">Total anual</th>
             </tr>
           </thead>
           <tbody>
@@ -126,32 +120,34 @@ export default function BurnCalendar(props: Props) {
                     <button
                       type="button"
                       onClick={() => props.onSelectYear(year)}
-                      className={`w-full rounded px-1 text-left font-mono text-[11px] ${
-                        sel ? "bg-orange-500/20 text-orange-300" : "text-slate-400 hover:text-slate-100"
+                      title={`${year}: ${formatNumber(total, mode === "harmonized" ? 1 : 0)} en el año`}
+                      className={`w-full rounded px-0.5 text-left font-mono text-[9.5px] leading-[13px] ${
+                        sel ? "bg-orange-500/20 text-orange-300" : "text-slate-500 hover:text-slate-100"
                       }`}
                     >
-                      {year}
-                      {year === 2012 && <span className="ml-1 text-[9px] text-sky-400">VIIRS</span>}
+                      {String(year).slice(2)}
+                      {year === 2012 && <span className="text-sky-400">*</span>}
                     </button>
                   </td>
                   {row.map((c) => {
                     const v = cellValue(c, mode);
                     if (!c.has_coverage) {
                       return (
-                        <td key={c.month} className="h-[22px] rounded-sm bg-[repeating-linear-gradient(45deg,#0f172a,#0f172a_3px,#1e293b_3px,#1e293b_6px)]" title="Sin cobertura de datos" />
+                        <td key={c.month} className="h-[13px] rounded-[2px] bg-[repeating-linear-gradient(45deg,#0f172a,#0f172a_2px,#1e293b_2px,#1e293b_4px)]" title="Sin cobertura de datos" />
                       );
                     }
                     const bg = paletteColor(palette, scale(v));
                     const cloudy = (c.avg_cloud_cover ?? 0) >= CLOUD_FLAG_PCT;
+                    const isSel = sel && props.selectedMonth === c.month;
                     return (
                       <td key={c.month} className="p-0">
                         <button
                           type="button"
-                          onClick={() => props.onSelectYear(year)}
-                          className={`relative flex h-[22px] w-full items-center justify-center rounded-sm font-mono text-[9.5px] ${
-                            sel ? "outline outline-1 outline-orange-400" : ""
+                          onClick={() => props.onSelectMonth(year, c.month)}
+                          className={`relative block h-[13px] w-full rounded-[2px] ${
+                            isSel ? "outline outline-2 outline-white" : sel ? "outline outline-1 outline-orange-400/80" : ""
                           }`}
-                          style={{ background: bg, color: textOn(bg) }}
+                          style={{ background: bg }}
                           title={`${MONTHS_LONG[c.month - 1]} ${year}: ${formatNumber(v, mode === "harmonized" ? 1 : 0)} ${
                             mode === "harmonized" ? "eventos armonizados" : "detecciones crudas"
                           } · ${c.active_cells} celdas-día · nubosidad ${c.avg_cloud_cover?.toFixed(0) ?? "—"} %${
@@ -159,51 +155,33 @@ export default function BurnCalendar(props: Props) {
                           }${cloudy ? " — baja visibilidad óptica: posible subdetección de focos" : ""}`}
                           aria-label={`${MONTHS_LONG[c.month - 1]} ${year}: ${compact(v)}`}
                         >
-                          {v > 0 ? compact(v) : ""}
                           {cloudy && (
-                            <Cloud
-                              className="absolute right-0.5 top-0.5 h-2.5 w-2.5"
-                              style={{ color: textOn(bg), opacity: 0.85 }}
-                              aria-hidden
-                            />
+                            <span className="absolute right-[1px] top-[1px] h-[3px] w-[3px] rounded-full" style={{ background: textOn(bg) }} />
                           )}
                         </button>
                       </td>
                     );
                   })}
-                  <td className="pl-2">
-                    <div className="flex items-center gap-1.5">
-                      <div className="h-2 flex-1 rounded-sm bg-slate-800">
-                        <div
-                          className="h-2 rounded-sm bg-orange-500/80"
-                          style={{ width: `${(total / maxAnnual) * 100}%` }}
-                        />
-                      </div>
-                      <span className="w-10 text-right font-mono text-[10px] text-slate-400">{compact(total)}</span>
-                    </div>
-                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
 
-        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[10.5px] text-slate-400">
+        <div className="mt-2 space-y-1 px-1 text-[10px] text-slate-400">
           <span className="flex items-center gap-2">
             0
-            <span className="inline-block h-2.5 w-40 rounded-sm" style={{ background: gradientCss(palette) }} />
+            <span className="inline-block h-2 w-28 rounded-sm" style={{ background: gradientCss(palette) }} />
             {compact(max)} <span className="text-slate-500">(escala √)</span>
           </span>
-          <span className="flex items-center gap-1.5">
-            <Cloud className="h-3 w-3" aria-hidden /> Nubosidad ≥ {CLOUD_FLAG_PCT} % (MODIS): baja visibilidad óptica; posible
-            subdetección
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-4 bg-[repeating-linear-gradient(45deg,#0f172a,#0f172a_3px,#1e293b_3px,#1e293b_6px)]" />
-            Sin cobertura
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-4 border-t border-dashed border-sky-500" /> Inicio VIIRS (nov-2012, archivo FIRMS)
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="flex items-center gap-1">
+              <Cloud className="h-3 w-3" aria-hidden /> punto = nubosidad ≥ {CLOUD_FLAG_PCT} %
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-2 w-3 bg-[repeating-linear-gradient(45deg,#0f172a,#0f172a_2px,#1e293b_2px,#1e293b_4px)]" /> sin cobertura
+            </span>
+            <span className="text-sky-400">12* inicio VIIRS (nov-2012)</span>
           </span>
         </div>
       </div>

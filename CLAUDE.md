@@ -9,7 +9,7 @@
 
 ## 2. Equipo y Reglas de Arquitectura
 - **Equipo:** 2 Desarrolladores Backend + 1 Geólogo.
-- **Arquitectura Zero-Friction:** Todo el procesamiento ETL ocurre offline en Python. Los datos armonizados y capas ambientales se almacenan en **Supabase (PostgreSQL + PostGIS)**. El frontend en **Next.js (App Router)** consulta directamente vía Supabase RPC y despliega en Vercel. **Excepción acordada (nov-2026):** la capa de focos en tiempo casi real se sirve desde la ruta de servidor `web/src/app/api/firms-live` (FIRMS NRT NOAA-20/21 + MODIS, key solo en el servidor, caché 15 min); no se armoniza ni alimenta el calendario.
+- **Arquitectura Zero-Friction:** Todo el procesamiento ETL ocurre offline en Python. Los datos armonizados y capas ambientales se almacenan en **Supabase (PostgreSQL + PostGIS)**. El frontend en **Next.js (App Router)** consulta directamente vía Supabase RPC y despliega en Vercel. **Excepción acordada (nov-2026):** la capa de focos en tiempo casi real se sirve desde la ruta de servidor `web/src/app/api/firms-live` (FIRMS NRT NOAA-20/21 + MODIS, key solo en el servidor, caché 15 min); no se armoniza ni alimenta el calendario. También se muestran mosaicos de imagen GOES-19 (GOES-Este) de NASA GIBS directamente en el mapa, como el mapa base.
 - **Sensores y Fuentes Obligatorias a Citar y Modelar:**
   - **NASA FIRMS:** MODIS C6.1 (1 km) + VIIRS 375 m (S-NPP hasta 01-11-2026; NOAA-20 desde 02-11-2026; NOAA-21 en tiempo real).
   - **NASA SRTM:** Inclinación del terreno / pendiente (`slope_deg`).

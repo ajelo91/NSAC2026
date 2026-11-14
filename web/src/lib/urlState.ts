@@ -9,6 +9,8 @@ export interface UrlState {
   bbox?: BBox;
   place?: string;
   year?: number;
+  /** 1–12; ausente = todo el año */
+  month?: number;
   section?: Section;
   mode?: SeriesMode;
 }
@@ -25,6 +27,8 @@ export function readUrlState(): UrlState {
   if (place) out.place = place;
   const y = Number(p.get("y"));
   if (Number.isInteger(y) && y >= 2000 && y <= 2100) out.year = y;
+  const mo = Number(p.get("m"));
+  if (Number.isInteger(mo) && mo >= 1 && mo <= 12) out.month = mo;
   const s = p.get("s") as Section | null;
   if (s && SECTIONS.includes(s)) out.section = s;
   const m = p.get("serie");
@@ -40,6 +44,7 @@ export function writeUrlState(s: UrlState): void {
     if (s.place) p.set("lugar", s.place);
   } else if (s.region) p.set("r", s.region);
   if (s.year) p.set("y", String(s.year));
+  if (s.month) p.set("m", String(s.month));
   if (s.section && s.section !== "resumen") p.set("s", s.section);
   if (s.mode === "raw") p.set("serie", "raw");
   const url = `${window.location.pathname}?${p.toString()}`;

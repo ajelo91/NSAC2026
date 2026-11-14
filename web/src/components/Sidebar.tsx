@@ -20,12 +20,11 @@ interface Props {
 }
 
 export default function Sidebar({ section, onSection, mobileOpen, onMobileOpen, children }: Props) {
-  const wide = section === "calendario";
   return (
     <aside
       className={`absolute inset-x-0 bottom-0 z-[1050] flex flex-col rounded-t-2xl border-t border-slate-800 bg-slate-950 shadow-[0_-10px_30px_rgba(0,0,0,0.5)] transition-[height] duration-200 lg:static lg:h-auto lg:shrink-0 lg:rounded-none lg:border-r lg:border-t-0 lg:shadow-none lg:transition-[width] ${
         mobileOpen ? "h-[65dvh]" : "h-[7.5rem]"
-      } ${wide ? "lg:w-[min(880px,62vw)]" : "lg:w-[430px]"}`}
+      } lg:w-[430px]`}
       aria-label="Panel de análisis"
     >
       <button
