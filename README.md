@@ -72,6 +72,6 @@ La capa operativa de focos recientes está separada del histórico armonizado. P
 
 Pasos: ejecutar `etl/sql/006_live_firms_monitoring.sql` en Supabase, cargar `NASA_FIRMS_MAP_KEY`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` como GitHub Actions Secrets y ejecutar el workflow `NASA FIRMS near-real-time ingestion` manualmente. Luego se ejecuta cada 30 minutos.
 
-## Fuentes de Datos Oficiales
+### GOES-19 (fuente complementaria documentada; ingestor pendiente)\n\nSe documentó el acceso público NOAA AWS al producto ABI L2+ FDCF para evaluar una futura capa GOES-19. No requiere API key ni cuenta AWS para lectura del bucket público. Su cadencia nominal es 10 minutos y el tamaño de píxel nominal es ~2 km; complementa, no reemplaza, VIIRS. La integración de ingesta aún no está implementada. Alcance, límites de calidad y bounding boxes exactas de CORDOBA/PATAGONIA: [docs/NRT_MONITORING.md](docs/NRT_MONITORING.md#fuente-complementaria-goes-19-noaa-abi-l2-fdcf). Fuente de acceso: https://registry.opendata.aws/noaa-goes/.\n\n## Fuentes de Datos Oficiales
 - **NASA FIRMS (Fire Information for Resource Management System):** MODIS Collection 6.1 (MCD14ML) y VIIRS 375m (VNP14IMGTDL_NRT / Suomi-NPP Archive).
 - **Inspiración Regional:** CONAE (Comisión Nacional de Actividades Espaciales) — Casos de estudio en Delta del Paraná, Sierras de Córdoba, Patagonia Andina, Cuyo y Cuenca Neuquina.
