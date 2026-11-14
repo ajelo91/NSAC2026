@@ -17,6 +17,11 @@ Pipeline (METHODOLOGY.md):
        harmonized_weight = 1.0 si hay MODIS ; alpha si es solo VIIRS      (--harmonization methodology)
        o, variante B: 1.0 antes de 2012 ; alpha si hay VIIRS ; 0 si solo MODIS (--harmonization viirs-scaled)
        El MISMO alpha se aplica a Córdoba y a Patagonia Andina.
+       Referencia VIIRS: Suomi-NPP hasta su último dato (FIRMS dejó de producirlo el
+       02-11-2026) y NOAA-20 desde el día siguiente, con su propio alpha_N20 calibrado igual
+       (Córdoba, MODIS vs NOAA-20 en 2018–2024). Una sola plataforma VIIRS por día: sumar
+       NOAA-20/21 a S-NPP multiplicaría las pasadas y crearía un salto artificial.
+       NOAA-21 no entra en el calendario: se usa en la capa de tiempo real de la web.
   5. Enriquecimiento ambiental por celda/mes
        slope_deg, soil_moisture_pct, cloud_cover_pct, wind_speed_kmh,
        wind_direction_deg, ndvi_pre_fire
@@ -32,6 +37,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -77,6 +83,20 @@ HARMONIZATION_MODES = ("methodology", "viirs-scaled")
 HARMONIZATION_DEFAULT = "methodology"
 VIIRS_ERA_START = pd.Timestamp("2012-01-20")
 
+# Plataformas VIIRS (atributo `satellite` de FIRMS: N = Suomi-NPP, N20 = NOAA-20, N21 = NOAA-21)
+VIIRS_SATELLITE_ALIASES = {
+    "N": "SNPP", "NPP": "SNPP", "SNPP": "SNPP", "S-NPP": "SNPP", "SUOMI NPP": "SNPP", "SUOMI-NPP": "SNPP",
+    "N20": "N20", "NOAA-20": "N20", "NOAA20": "N20", "J1": "N20", "1": "N20",
+    "N21": "N21", "NOAA-21": "N21", "NOAA21": "N21", "J2": "N21", "2": "N21",
+}
+# Prefijos de archivo FIRMS / fetch_firms.py cuando la columna satellite no está
+VIIRS_FILE_HINTS = (("J2V", "N21"), ("NOAA21", "N21"), ("J1V", "N20"), ("NOAA20", "N20"), ("SV-", "SNPP"), ("SNPP", "SNPP"))
+VIIRS_REFERENCE_ORDER = ("SNPP", "N20")   # cadena de continuidad del calendario
+# FIRMS dejó de producir Suomi-NPP el 02-11-2026 13:00 UTC (las pasadas diurnas sobre Argentina
+# son ~17–19 UTC): el último día completo de S-NPP es el 01-11-2026; NOAA-20 desde el 02-11-2026.
+# Fecha fija (no "último dato en la región") para no cambiar de plataforma en un período sin fuegos.
+SNPP_LAST_DAY = pd.Timestamp("2026-11-01")
+
 VEGETATION = "VEGETATION"
 VOLCANIC_INDUSTRIAL = "VOLCANIC_INDUSTRIAL"
 
@@ -115,7 +135,7 @@ OUTPUT_COLUMNS = [
 ]
 
 REQUIRED_INPUT_COLUMNS = {"latitude", "longitude", "acq_date", "confidence"}
-OPTIONAL_INPUT_COLUMNS = {"frp", "instrument"}
+OPTIONAL_INPUT_COLUMNS = {"frp", "instrument", "acq_time", "satellite"}
 
 
 # ---------------------------------------------------------------------------
@@ -133,11 +153,22 @@ def _infer_sensor_from_confidence(conf: pd.Series) -> str | None:
     return None
 
 
+def _platform(df: pd.DataFrame, sensor: pd.Series, filename: str) -> pd.Series:
+    """Plataforma: SNPP / N20 / N21 para VIIRS (columna satellite o nombre de archivo), MODIS para MODIS."""
+    hint = next((p for k, p in VIIRS_FILE_HINTS if k in filename.upper()), "SNPP")
+    if "satellite" in df.columns:
+        sat = df["satellite"].astype(str).str.strip().str.upper().map(VIIRS_SATELLITE_ALIASES)
+        sat = sat.fillna(hint)
+    else:
+        sat = pd.Series(hint, index=df.index)
+    return pd.Series(np.where(sensor.to_numpy() == "MODIS", "MODIS", sat.to_numpy()), index=df.index)
+
+
 def load_firms_csv(path: Path) -> pd.DataFrame:
     df = pd.read_csv(
         path,
         usecols=lambda c: c.strip().lower() in REQUIRED_INPUT_COLUMNS | OPTIONAL_INPUT_COLUMNS,
-        dtype={"confidence": str, "instrument": str},
+        dtype={"confidence": str, "instrument": str, "acq_time": str, "satellite": str},
         low_memory=False,
     )
     df.columns = [c.strip().lower() for c in df.columns]
@@ -162,6 +193,8 @@ def load_firms_csv(path: Path) -> pd.DataFrame:
             "frp": pd.to_numeric(df["frp"], errors="coerce") if "frp" in df else np.nan,
             "sensor": sensor,
             "confidence": df["confidence"].astype(str).str.strip().str.lower(),
+            "acq_time": df["acq_time"].astype(str).str.strip().str.zfill(4) if "acq_time" in df else "",
+            "platform": _platform(df, sensor, path.name),
         }
     )
     bad = out[["lat", "lon", "acq_date", "sensor"]].isna().any(axis=1)
@@ -177,11 +210,27 @@ def load_raw_directory(raw_dir: Path) -> pd.DataFrame:
         sys.exit(f"✗ No hay CSVs en {raw_dir}. Descargá FIRMS o ejecutá con --generate-sample.")
     print(f"▶ Leyendo {len(files)} archivo(s) de {raw_dir}")
     frames = []
+    seen: pd.Index | None = None
+    repeated = 0
     for path in files:
         frame = load_firms_csv(path)
-        print(f"  • {path.name}: {len(frame):,} filas {frame['sensor'].value_counts().to_dict()}")
+        # Los CSV del Country Archive y los de fetch_firms.py (API) pueden solaparse en algún día.
+        # Solo se descartan detecciones que ya estaban en un archivo ANTERIOR (mismo sensor, día,
+        # hora de pasada y posición a 4 decimales); dentro de un mismo archivo no se toca nada.
+        key = pd.MultiIndex.from_arrays(
+            [frame["platform"], frame["acq_date"], frame["acq_time"], frame["lat"].round(4), frame["lon"].round(4)]
+        )
+        if seen is not None:
+            dup = key.isin(seen)
+            if dup.any():
+                repeated += int(dup.sum())
+                frame, key = frame[~dup], key[~dup]
+        seen = key if seen is None else seen.append(key)
+        print(f"  • {path.name}: {len(frame):,} filas {frame['platform'].value_counts().to_dict()}")
         frames.append(frame)
-    return pd.concat(frames, ignore_index=True)
+    if repeated:
+        print(f"  • {repeated:,} detecciones ya presentes en otro archivo se descartan")
+    return pd.concat(frames, ignore_index=True).drop(columns="acq_time")
 
 
 def assign_region(df: pd.DataFrame) -> pd.DataFrame:
@@ -207,6 +256,13 @@ class PipelineStats:
     stationary_detections: int = 0
     stationary_cell_days: int = 0
     alpha: float = float("nan")
+    alpha_n20: float = float("nan")
+    alpha_n20_source: str = ""
+    beta_snpp_n20: float = float("nan")
+    n20_window: tuple = ("", "")
+    snpp_end: str = ""
+    viirs_reference: dict = field(default_factory=dict)
+    excluded_viirs: dict = field(default_factory=dict)
     modis_window_events: int = 0
     viirs_window_events: int = 0
     env_source: dict = field(default_factory=dict)
@@ -214,6 +270,24 @@ class PipelineStats:
     harmonization_mode: str = HARMONIZATION_DEFAULT
     continuity: dict = field(default_factory=dict)
     calibration_window: tuple = ("", "")
+
+
+def select_viirs_reference(df: pd.DataFrame, stats: PipelineStats) -> tuple[pd.DataFrame, pd.DataFrame, pd.Timestamp | None]:
+    """Una sola plataforma VIIRS por día: S-NPP hasta su último dato, NOAA-20 después.
+    Devuelve (serie de referencia, detecciones NOAA-20 para calibrar alpha_N20, último día S-NPP)."""
+    viirs = df["sensor"] == "VIIRS"
+    snpp = viirs & (df["platform"] == "SNPP")
+    n20 = viirs & (df["platform"] == "N20")
+    snpp_end = SNPP_LAST_DAY if snpp.any() else None
+    if snpp_end is None:
+        ref_viirs = n20
+    else:
+        ref_viirs = (snpp & (df["acq_date"] <= snpp_end)) | (n20 & (df["acq_date"] > snpp_end))
+    keep = (df["sensor"] == "MODIS") | ref_viirs
+    stats.viirs_reference = df.loc[ref_viirs, "platform"].value_counts().to_dict()
+    stats.excluded_viirs = df.loc[viirs & ~ref_viirs, "platform"].value_counts().to_dict()
+    stats.snpp_end = snpp_end.date().isoformat() if snpp_end is not None else ""
+    return df.loc[keep].copy(), df.loc[n20 | (df["sensor"] == "MODIS")].copy(), snpp_end
 
 
 def stage1_quality_filter(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFrame:
@@ -301,7 +375,7 @@ def stage3_grid_aggregation(df: pd.DataFrame, stats: PipelineStats) -> pd.DataFr
 
 
 def harmonized_weights(
-    cells: pd.DataFrame, alpha: float, mode: str, viirs_start: pd.Timestamp = VIIRS_ERA_START
+    cells: pd.DataFrame, alpha: float | np.ndarray, mode: str, viirs_start: pd.Timestamp = VIIRS_ERA_START
 ) -> np.ndarray:
     if mode == "methodology":
         return np.where(cells["has_modis"], 1.0, alpha)
@@ -345,16 +419,65 @@ def stage4_transfer_calibration(
     else:
         alpha = n_modis / n_viirs
     cells = cells.copy()
-    cells["harmonized_weight"] = harmonized_weights(cells, alpha, mode, first_viirs)
+    alpha_day = _alpha_by_day(cells, alpha, stats)
+    cells["harmonized_weight"] = harmonized_weights(cells, alpha_day, mode, first_viirs)
     stats.alpha, stats.modis_window_events, stats.viirs_window_events = alpha, n_modis, n_viirs
     stats.calibration_window = (window_start.date().isoformat(), window_end.date().isoformat())
     stats.harmonization_mode = mode
     # Diagnóstico de continuidad para AMBAS variantes (para comparar)
     stats.continuity = {
-        m: {r: continuity_ratio(cells, harmonized_weights(cells, alpha, m, first_viirs), r) for r in REGIONS}
+        m: {r: continuity_ratio(cells, harmonized_weights(cells, alpha_day, m, first_viirs), r) for r in REGIONS}
         for m in HARMONIZATION_MODES
     }
     return cells
+
+
+def _alpha_by_day(cells: pd.DataFrame, alpha: float, stats: PipelineStats) -> np.ndarray | float:
+    """alpha de S-NPP hasta su último dato; alpha_N20 después (si hay NOAA-20 calibrable)."""
+    if not stats.snpp_end or np.isnan(stats.alpha_n20):
+        return alpha
+    after = (cells["acq_date"] > pd.Timestamp(stats.snpp_end)).to_numpy()
+    return np.where(after, stats.alpha_n20, alpha)
+
+
+def calibrate_noaa20(n20_df: pd.DataFrame, ref_cells: pd.DataFrame, stats: PipelineStats) -> None:
+    """Calibración en cadena para la continuidad S-NPP → NOAA-20 (misma región y celdas VEGETATION):
+         beta      = Σ celdas-día S-NPP / Σ celdas-día NOAA-20   en el período en que vuelan ambos
+                     (primer dato NOAA-20 → último día de S-NPP)
+         alpha_N20 = alpha · beta
+    Así NOAA-20 queda en la escala de S-NPP y hereda el MISMO alpha (ventana 2012–2024): no se
+    introduce un alpha de otro período. Como diagnóstico se informa también MODIS/NOAA-20 directo."""
+    df = n20_df[n20_df["region"] == CALIBRATION_REGION]
+    n20 = df[df["sensor"] == "VIIRS"]
+    end = pd.Timestamp(stats.snpp_end) if stats.snpp_end else None
+    if n20.empty or end is None or n20["acq_date"].min() > end:
+        stats.alpha_n20 = stats.alpha
+        stats.alpha_n20_source = "sin solapamiento S-NPP/NOAA-20 en raw_data: alpha_N20 = alpha (instrumentos gemelos)"
+        return
+    start = n20["acq_date"].min()
+    lat_idx = np.floor(df["lat"].to_numpy() * GRID_SCALE).astype(np.int64)
+    lon_idx = np.floor(df["lon"].to_numpy() * GRID_SCALE).astype(np.int64)
+    cell = pd.Series(lat_idx).astype(str).values + "_" + pd.Series(lon_idx).astype(str).values
+    stationary = set(ref_cells.loc[ref_cells["thermal_type"] == VOLCANIC_INDUSTRIAL, "grid_cell_id"])
+    w = pd.DataFrame({"cell": cell, "day": df["acq_date"].values, "sensor": df["sensor"].values})
+    w = w[(w["day"] >= start) & (w["day"] <= end) & ~w["cell"].isin(stationary)].drop_duplicates()
+    n_n20 = int((w["sensor"] == "VIIRS").sum())
+    n_modis = int((w["sensor"] == "MODIS").sum())
+    ref = ref_cells[
+        (ref_cells["region"] == CALIBRATION_REGION) & (ref_cells["thermal_type"] == VEGETATION)
+        & ref_cells["acq_date"].between(start, end)
+    ]
+    n_snpp = int(ref["has_viirs"].sum())
+    stats.n20_window = (start.date().isoformat(), end.date().isoformat())
+    if n_n20 and n_snpp:
+        stats.beta_snpp_n20 = n_snpp / n_n20
+        stats.alpha_n20 = stats.alpha * stats.beta_snpp_n20
+        direct = f"; MODIS/NOAA-20 directo {n_modis / n_n20:.4f}" if n_modis else ""
+        stats.alpha_n20_source = (f"alpha·beta, solapamiento Córdoba {stats.n20_window[0]} → {stats.n20_window[1]}: "
+                                  f"{n_snpp:,} S-NPP / {n_n20:,} NOAA-20{direct}")
+    else:
+        stats.alpha_n20 = stats.alpha
+        stats.alpha_n20_source = "solapamiento sin eventos: alpha_N20 = alpha"
 
 
 # ---------------------------------------------------------------------------
@@ -513,14 +636,19 @@ def run_pipeline(
     stats = PipelineStats()
     raw = assign_region(raw)
     print("▶ Etapa 1: control de calidad radiométrica")
-    df = stage1_quality_filter(raw, stats)
+    df_all = stage1_quality_filter(raw, stats)
+    df, n20_df, _ = select_viirs_reference(df_all, stats)
+    print(f"  referencia VIIRS: {stats.viirs_reference} (S-NPP hasta {stats.snpp_end or '—'}); "
+          f"fuera del calendario: {stats.excluded_viirs or '—'}")
     print(f"▶ Etapa 2: enmascaramiento geológico/industrial (persistencia por {'celda 0.01°' if stationary_scale == 'cell' else 'punto 0.001°'})")
     df = stage2_stationary_mask(df, stats, stationary_scale)
     print("▶ Etapa 3: grilla unificada 0.01° × día")
     cells = stage3_grid_aggregation(df, stats)
     print(f"▶ Etapa 4: calibración en Córdoba {CALIBRATION_START_YEAR}-{CALIBRATION_END_YEAR} → transferencia a Patagonia")
     print(f"  variante de pesos: {harmonization}")
-    cells = stage4_transfer_calibration(cells, stats, harmonization)
+    stage4_alpha_only = stage4_transfer_calibration(cells, stats, harmonization)  # fija stats.alpha
+    calibrate_noaa20(n20_df, stage4_alpha_only, stats)
+    cells = stage4_transfer_calibration(cells, stats, harmonization)              # aplica alpha / alpha_N20
     print("▶ Etapa 5: variables ambientales por celda/mes")
     cells = stage5_environment(cells, aux_dir, stats)
 
@@ -550,6 +678,12 @@ def print_summary(out: pd.DataFrame, stats: PipelineStats) -> None:
     print(f"   celdas-día MODIS ................... {stats.modis_window_events:>11,}")
     print(f"   celdas-día VIIRS ................... {stats.viirs_window_events:>11,}")
     print(f"   ALPHA (Córdoba) = MODIS / VIIRS .... {stats.alpha:>11.4f}")
+    print(f"   ALPHA_N20 (NOAA-20) ................ {stats.alpha_n20:>11.4f}  ({stats.alpha_n20_source})")
+    if not np.isnan(stats.beta_snpp_n20):
+        print(f"   BETA S-NPP / NOAA-20 ............... {stats.beta_snpp_n20:>11.4f}  (gemelos: ideal ≈ 1)")
+    print(f"   Referencia VIIRS: S-NPP hasta {stats.snpp_end or '—'}, NOAA-20 después · {stats.viirs_reference}")
+    if stats.excluded_viirs:
+        print(f"   Fuera del calendario (solo tiempo real / validación): {stats.excluded_viirs}")
     print(line)
     print(" CONTINUIDAD 2012-2024: armonizada / solo-MODIS (ideal 1.00 = sin salto en 2012)")
     for m, by_region in stats.continuity.items():
@@ -777,6 +911,16 @@ def main(argv=None) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.output, index=False)
     print_summary(out, stats)
+    calib = {
+        "alpha": stats.alpha, "alpha_n20": stats.alpha_n20, "beta_snpp_n20": stats.beta_snpp_n20,
+        "calibration_window": list(stats.calibration_window), "n20_window": list(stats.n20_window),
+        "snpp_end": stats.snpp_end, "viirs_reference": stats.viirs_reference,
+        "excluded_viirs": stats.excluded_viirs, "harmonization": stats.harmonization_mode,
+    }
+    (args.output.parent / "calibration.json").write_text(
+        json.dumps({k: (None if isinstance(v, float) and np.isnan(v) else v) for k, v in calib.items()}, indent=2),
+        encoding="utf-8",
+    )
     print(f"✔ {len(out):,} filas escritas en {args.output}")
     return 0
 

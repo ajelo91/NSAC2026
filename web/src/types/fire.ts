@@ -123,6 +123,7 @@ export interface MonthlyBaseline {
 }
 
 export interface MapLayers {
+  live: boolean;
   hotspots: boolean;
   spread: boolean;
   susceptibility: boolean;

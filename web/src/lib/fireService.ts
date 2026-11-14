@@ -359,7 +359,12 @@ export async function getCalibrationAlpha(): Promise<{ alpha: number | null; sou
   if (!sb) return snapshot();
   try {
     const { data, error } = await withTimeout(
-      sb.from("harmonized_hotspots").select("harmonized_weight").eq("sensor_source", "VIIRS").limit(1),
+      sb
+        .from("harmonized_hotspots")
+        .select("harmonized_weight")
+        .eq("sensor_source", "VIIRS")
+        .order("acq_date", { ascending: true }) // α de S-NPP (calibración); NOAA-20 usa α·β desde 02-11-2026
+        .limit(1),
       "alpha",
     );
     if (error) throw error;

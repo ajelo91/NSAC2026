@@ -53,13 +53,16 @@ def main() -> int:
         else:
             print(f"  ⚠ falta aux_data/{name}; la web no tendrá esa capa en modo respaldo")
 
-    viirs_only = h.loc[h["sensor_source"] == "VIIRS", "harmonized_weight"]
+    viirs_only = h.loc[h["sensor_source"] == "VIIRS"].sort_values("acq_date")["harmonized_weight"]
+    calib_path = ETL / "calibration.json"
+    calib = json.loads(calib_path.read_text(encoding="utf-8")) if calib_path.exists() else {}
     meta = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "alpha": float(viirs_only.iloc[0]) if len(viirs_only) else None,
         "date_range": [h["acq_date"].min(), h["acq_date"].max()],
         "rows": files,
-        "source": "NASA FIRMS MODIS C6.1 + VIIRS S-NPP C2 armonizado (etl/harmonize.py)",
+        "calibration": calib,
+        "source": "NASA FIRMS MODIS C6.1 + VIIRS S-NPP C2 → NOAA-20 (desde 02-11-2026) armonizado (etl/harmonize.py)",
     }
     (OUT / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     for f, n in files.items():

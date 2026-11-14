@@ -7,6 +7,8 @@ import type { IotReading, IotSource } from "@/lib/iot";
 import type { IotStation } from "@/lib/regions";
 import type { Section } from "@/lib/urlState";
 import KpiCards from "../KpiCards";
+import LiveFiresCard from "../LiveFiresCard";
+import type { LiveFiresResult } from "@/lib/firmsLive";
 import { LIGHT, PreventionList, StationsCard, TrafficLight } from "../PreventionCharterPanel";
 
 interface Props {
@@ -21,6 +23,8 @@ interface Props {
   liveSource: IotSource | null;
   liveNote?: string;
   emptyMessage: string | null;
+  liveFires: LiveFiresResult | null;
+  onShowLive: () => void;
   onGo: (s: Section) => void;
 }
 
@@ -28,6 +32,8 @@ export default function SummaryPanel(p: Props) {
   const charter = p.conditions ? evaluateCharter(p.conditions) : null;
   return (
     <div className="space-y-4">
+      <LiveFiresCard live={p.liveFires} onShowMap={p.onShowLive} />
+
       {/* Estado del área */}
       <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
         <p className="text-[11px] uppercase tracking-wide text-slate-500">Estado del área · {p.scenarioLabel}</p>

@@ -13,13 +13,15 @@ interface Props {
   alpha: number | null;
   dataSource: DataSource | null;
   liveSource: IotSource | null;
+  liveFiresOk: boolean;
   hasGrid: boolean;
   onOpenMethodology: () => void;
 }
 
 export default function DataPanel(p: Props) {
   const rows: { label: string; source: string; ok: boolean }[] = [
-    { label: "Focos de calor 2000–2026", source: "NASA FIRMS MODIS C6.1 + VIIRS S-NPP, armonizados", ok: p.dataSource != null },
+    { label: "Focos de calor 2000–2026 (calendario)", source: "NASA FIRMS MODIS C6.1 + VIIRS S-NPP → NOAA-20 (desde 02-11-2026), armonizados", ok: p.dataSource != null },
+    { label: "Focos en tiempo casi real (72 h)", source: "NASA FIRMS NRT · VIIRS NOAA-20 + NOAA-21 + MODIS, sin armonizar", ok: p.liveFiresOk },
     { label: "Pendiente del terreno", source: "NASA SRTM 30 m", ok: p.dataSource != null },
     { label: "Humedad de suelo", source: "NASA GLDAS-2.1 / SMAP", ok: p.dataSource != null },
     { label: "Vegetación (NDVI) y nubosidad", source: "NASA MODIS MOD13A3 / MOD09GA", ok: p.dataSource != null },

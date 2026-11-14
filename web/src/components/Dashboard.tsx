@@ -28,6 +28,7 @@ import {
 } from "@/lib/fireService";
 import { bboxCenter, CUSTOM_REGION, DEFAULT_REGION, FALLBACK_REGIONS, inBBox, IOT_STATIONS, MONTHS_LONG } from "@/lib/regions";
 import { fetchLiveReadings, type LiveReadingsResult } from "@/lib/iot";
+import { fetchLiveFires, summarizeLive, type LiveFiresResult } from "@/lib/firmsLive";
 import { anomalyPct, monthlyBaseline, quantile } from "@/lib/stats";
 import { computeSpreadVectors, dominantBearing, compassLabel } from "@/lib/spread";
 import { buildSusceptibilityFromGrid } from "@/lib/susceptibility";
@@ -62,7 +63,7 @@ export default function Dashboard() {
   const [selectedYear, setSelectedYear] = useState(DEFAULT_YEAR);
   const [section, setSection] = useState<Section>("resumen");
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [layers, setLayers] = useState<MapLayers>({ hotspots: true, spread: true, susceptibility: false, iot: true, wind: true });
+  const [layers, setLayers] = useState<MapLayers>({ live: true, hotspots: true, spread: true, susceptibility: false, iot: true, wind: true });
   const [calendar, setCalendar] = useState<CalendarResult | null>(null);
   const [hotspots, setHotspots] = useState<HotspotsResult | null>(null);
   const [recurrence, setRecurrence] = useState<RecurrenceCell[]>([]);
@@ -72,6 +73,7 @@ export default function Dashboard() {
   const [loadingCal, setLoadingCal] = useState(true);
   const [loadingHs, setLoadingHs] = useState(true);
   const [live, setLive] = useState<LiveReadingsResult | null>(null);
+  const [liveFires, setLiveFires] = useState<LiveFiresResult | null>(null);
   const [methodologyOpen, setMethodologyOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -167,6 +169,26 @@ export default function Dashboard() {
       clearInterval(id);
     };
   }, []);
+
+  // Focos en tiempo casi real del área visible (FIRMS NRT, caché de 15 min en el servidor)
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    const load = async () => {
+      const res = await fetchLiveFires(bbox);
+      if (!cancelled) setLiveFires(res);
+    };
+    const t = setTimeout(() => {
+      setLiveFires(null);
+      void load();
+    }, 0);
+    const id = setInterval(load, 15 * 60_000);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+      clearInterval(id);
+    };
+  }, [ready, bbox]);
 
   // ---------------------------------------------------------------- derivados
   const region = regions.find((r) => r.key === regionKey) ?? null;
@@ -336,6 +358,13 @@ export default function Dashboard() {
   }, [yearCells, baselineH]);
 
   const bearing = dominantBearing(spread);
+  const liveSummaryText = useMemo(() => {
+    if (!liveFires?.ok) return undefined;
+    const s = summarizeLive(liveFires.fires);
+    return s.total
+      ? `Tiempo casi real: ${s.last24} focos en 24 h · ${s.total} en ${liveFires.days * 24} h`
+      : `Tiempo casi real: sin focos en ${liveFires.days * 24} h`;
+  }, [liveFires]);
   const regionNames = regions.map((r) => r.name).join(", ");
   const emptyMessage =
     !loadingCal && calendar && !hasAnyData
@@ -430,6 +459,8 @@ export default function Dashboard() {
               liveSource={live?.source ?? null}
               liveNote={live?.note}
               emptyMessage={emptyMessage}
+              liveFires={liveFires}
+              onShowLive={() => setLayers((l) => ({ ...l, live: true }))}
               onGo={setSection}
             />
           )}
@@ -473,6 +504,7 @@ export default function Dashboard() {
               alpha={alpha}
               dataSource={calendar?.source ?? null}
               liveSource={live?.source ?? null}
+              liveFiresOk={liveFires?.ok ?? false}
               hasGrid={susceptibility.length > 0}
               onOpenMethodology={() => setMethodologyOpen(true)}
             />
@@ -499,6 +531,8 @@ export default function Dashboard() {
             loading={loadingHs}
             isfLabel={isfLabel}
             emptyMessage={emptyMessage}
+            liveFires={liveFires?.fires ?? []}
+            liveSummary={liveSummaryText}
           />
         </main>
       </div>
@@ -509,6 +543,7 @@ export default function Dashboard() {
         alpha={alpha}
         dataSource={calendar?.source ?? null}
         liveSource={live?.source ?? null}
+        liveFiresOk={liveFires?.ok ?? false}
       />
     </div>
   );

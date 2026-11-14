@@ -7,6 +7,7 @@ import type { IotSource } from "@/lib/iot";
 
 interface Props {
   liveSource?: IotSource | null;
+  liveFiresOk?: boolean;
   open: boolean;
   onClose: () => void;
   alpha: number | null;
@@ -16,15 +17,22 @@ interface Props {
 type Status = "Integrado" | "Copia estática" | "Sin conexión" | "Protocolo" | "No usado" | "En vivo";
 
 /** Estado de cada fuente: Supabase en vivo o copia estática de los mismos datos reales (web/public/data). */
-function sources(db: boolean, live: boolean): { agency: string; product: string; variable: string; role: string; status: Status }[] {
+function sources(db: boolean, live: boolean, fires: boolean): { agency: string; product: string; variable: string; role: string; status: Status }[] {
   const etl: Status = db ? "Integrado" : "Copia estática";
   return [
     {
       agency: "NASA FIRMS",
-      product: "MODIS C6.1 (1 km) + VIIRS S-NPP 375 m",
+      product: "MODIS C6.1 (1 km) + VIIRS 375 m: S-NPP hasta 01-11-2026, NOAA-20 desde 02-11-2026",
       variable: "Focos activos, FRP, confianza",
-      role: "Serie 2000–2026 armonizada en grilla 0.01° (Etapas 1–4)",
+      role: "Serie 2000–2026 armonizada en grilla 0.01° (Etapas 1–4); NOAA-20 llevado a la escala S-NPP (α·β)",
       status: etl,
+    },
+    {
+      agency: "NASA FIRMS NRT",
+      product: "VIIRS NOAA-20 + NOAA-21 (375 m) + MODIS Terra/Aqua, últimas 72 h",
+      variable: "Focos activos recientes",
+      role: "Capa de detección en tiempo casi real (sin armonizar; no entra en el calendario)",
+      status: fires ? "En vivo" : "Sin conexión",
     },
     {
       agency: "NASA SRTM",
@@ -113,7 +121,7 @@ function Formula(props: { children: React.ReactNode }) {
   );
 }
 
-export default function MethodologyModal({ open, onClose, alpha, dataSource, liveSource }: Props) {
+export default function MethodologyModal({ open, onClose, alpha, dataSource, liveSource, liveFiresOk = false }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -234,7 +242,7 @@ export default function MethodologyModal({ open, onClose, alpha, dataSource, liv
               </tr>
             </thead>
             <tbody>
-              {sources(dataSource === "supabase", liveSource === "meteomatics").map((s) => (
+              {sources(dataSource === "supabase", liveSource === "meteomatics", liveFiresOk).map((s) => (
                 <tr key={s.agency} className="border-b border-slate-800/70 align-top">
                   <td className="py-1.5 pr-3 font-medium text-slate-100">{s.agency}</td>
                   <td className="pr-3">{s.product}</td>

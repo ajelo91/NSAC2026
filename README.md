@@ -50,11 +50,17 @@ pyrosync/
 ```bash
 cd etl
 pip install -r requirements.txt
+python fetch_firms.py          # trae de la API de FIRMS los días que faltan (requiere FIRMS_MAP_KEY en etl/.env)
 python harmonize.py            # --generate-sample solo para probar el pipeline (no subir a producción)
 python upload_supabase.py --replace
 python export_web_snapshot.py  # copia de respaldo de los datos reales en web/public/data
 ```
 La web nunca genera datos: si Supabase no responde, lee la copia de `web/public/data`.
+
+El histórico completo (2000–hoy) se descarga una sola vez del FIRMS Country Archive (`raw_data/`). Después,
+`fetch_firms.py` completa solo los días nuevos para cada región (API de área, tramos de 10 días, versión estándar
+SP si ya existe y NRT si no) y los guarda en `raw_data/firms_api_MODIS.csv` / `firms_api_VIIRS.csv`. `harmonize.py`
+descarta las detecciones que aparezcan en más de un archivo.
 
 ### 3. Aplicación Web (Next.js)
 ```bash

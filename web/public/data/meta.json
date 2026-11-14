@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T19:08:17+00:00",
+  "generated_at": "2026-11-14T21:33:45+00:00",
   "alpha": 0.557177,
   "date_range": [
     "2000-11-01",
@@ -10,5 +10,24 @@
     "region_month_env.csv": 644,
     "env_grid_clim.csv": 23808
   },
-  "source": "NASA FIRMS MODIS C6.1 + VIIRS S-NPP C2 armonizado (etl/harmonize.py)"
+  "calibration": {
+    "alpha": 0.5571770607684414,
+    "alpha_n20": 0.5571770607684414,
+    "beta_snpp_n20": null,
+    "calibration_window": [
+      "2012-11-20",
+      "2024-12-31"
+    ],
+    "n20_window": [
+      "",
+      ""
+    ],
+    "snpp_end": "2026-11-01",
+    "viirs_reference": {
+      "SNPP": 45105
+    },
+    "excluded_viirs": {},
+    "harmonization": "methodology"
+  },
+  "source": "NASA FIRMS MODIS C6.1 + VIIRS S-NPP C2 → NOAA-20 (desde 02-11-2026) armonizado (etl/harmonize.py)"
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { ChevronDown, Flame, Layers, Loader2, Navigation, Radio, Route, ShieldAlert, Wind } from "lucide-react";
+import { ChevronDown, Flame, Layers, Loader2, Navigation, Radio, Route, Satellite, ShieldAlert, Wind } from "lucide-react";
 import type { MapLayers } from "@/types/fire";
 import type { MapViewProps } from "./MapView";
 import { RISK_COLORS, YLORRD } from "@/lib/colors";
@@ -24,9 +24,11 @@ interface Props extends Omit<MapViewProps, "show"> {
   isfLabel?: string;
   emptyMessage?: string | null;
   spreadSummary?: string;
+  liveSummary?: string;
 }
 
 const LAYER_DEFS: { key: keyof MapLayers; label: string; hint: string; Icon: typeof Flame }[] = [
+  { key: "live", label: "Focos en tiempo casi real", hint: "NOAA-20/21 + MODIS · últimas 72 h", Icon: Satellite },
   { key: "hotspots", label: "Focos armonizados", hint: "MODIS + VIIRS · celda 1 km", Icon: Flame },
   { key: "spread", label: "Avance de incendios", hint: "Dirección de cada evento", Icon: Route },
   { key: "susceptibility", label: "Riesgo (ISF)", hint: "Pendiente, suelo, viento, historia", Icon: ShieldAlert },
@@ -54,6 +56,7 @@ export default function MapSelector(props: Props) {
         susceptibility={props.susceptibility}
         iot={props.iot}
         wind={wind}
+        liveFires={props.liveFires}
         show={layers}
       />
 
@@ -67,6 +70,7 @@ export default function MapSelector(props: Props) {
             {props.truncated && " (límite 10.000)"}
           </p>
           {props.spreadSummary && layers.spread && <p className="text-[11px] text-slate-500">{props.spreadSummary}</p>}
+          {props.liveSummary && layers.live && <p className="text-[11px] text-rose-300">{props.liveSummary}</p>}
         </div>
         {layers.wind && wind && (
           <div className="pointer-events-auto flex w-fit items-center gap-2.5 rounded-lg border border-slate-800 bg-slate-950/90 px-3 py-2 shadow-xl backdrop-blur">
@@ -125,6 +129,18 @@ export default function MapSelector(props: Props) {
 
       {/* Leyenda */}
       <div className="absolute bottom-6 right-3 z-[1000] hidden max-w-[240px] space-y-2 rounded-lg border border-slate-800 bg-slate-950/90 p-2.5 text-[10.5px] text-slate-300 shadow-xl backdrop-blur sm:block">
+        {layers.live && (
+          <div>
+            <p className="mb-1 text-slate-400">Tiempo casi real (borde blanco)</p>
+            <div className="flex gap-2">
+              {[["#ef4444", "≤ 6 h"], ["#f97316", "≤ 24 h"], ["#facc15", "≤ 72 h"]].map(([c, l]) => (
+                <span key={l} className="flex items-center gap-1">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full border border-white" style={{ background: c }} /> {l}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         {layers.hotspots && (
           <div>
             <p className="mb-1 text-slate-400">Potencia del fuego (FRP, MW)</p>

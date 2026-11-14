@@ -23,6 +23,7 @@ import type { SpreadVector } from "@/lib/spread";
 import type { SusceptibilityCell } from "@/lib/susceptibility";
 import { compassLabel, destination } from "@/lib/spread";
 import { interpolate, RISK_COLORS, YLORRD } from "@/lib/colors";
+import { ageHours, ageLabel, localTime, type LiveFire } from "@/lib/firmsLive";
 
 export interface WindOverlay {
   origin: [number, number];
@@ -39,7 +40,13 @@ export interface MapViewProps {
   susceptibility: SusceptibilityCell[];
   iot: { station: IotStation; reading: IotReading }[];
   wind: WindOverlay | null;
-  show: { hotspots: boolean; spread: boolean; susceptibility: boolean; iot: boolean; wind: boolean };
+  liveFires: LiveFire[];
+  show: { live: boolean; hotspots: boolean; spread: boolean; susceptibility: boolean; iot: boolean; wind: boolean };
+}
+
+/** Color por antigüedad de la detección en tiempo casi real (rojo = última hora). */
+export function liveColor(h: number): string {
+  return h <= 6 ? "#ef4444" : h <= 24 ? "#f97316" : "#facc15";
 }
 
 const MAX_DRAWN_HOTSPOTS = 3500;
@@ -87,7 +94,7 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-export default function MapView({ bbox, hotspots, spread, susceptibility, iot, wind, show }: MapViewProps) {
+export default function MapView({ bbox, hotspots, spread, susceptibility, iot, wind, liveFires, show }: MapViewProps) {
   const drawn = useMemo(
     () =>
       hotspots.length > MAX_DRAWN_HOTSPOTS
@@ -257,6 +264,32 @@ export default function MapView({ bbox, hotspots, spread, susceptibility, iot, w
           />
         </>
       )}
+
+      {show.live &&
+        liveFires.map((f, i) => {
+          const h = ageHours(f);
+          return (
+            <CircleMarker
+              key={`live-${i}-${f.acq_datetime}-${f.lat}`}
+              center={[f.lat, f.lon]}
+              radius={f.instrument === "MODIS" ? 6 : 4.5}
+              pathOptions={{ color: "#ffffff", weight: 1.4, fillColor: liveColor(h), fillOpacity: h <= 24 ? 0.95 : 0.6 }}
+            >
+              <Popup>
+                <strong>Foco en tiempo casi real · {ageLabel(h)}</strong>
+                <Row k="Detectado" v={`${localTime(f.acq_datetime)} (hora AR)`} />
+                <Row k="Satélite" v={`${f.instrument} ${f.satellite}`} />
+                <Row k="Resolución" v={f.instrument === "MODIS" ? "1 km" : "375 m"} />
+                <Row k="FRP" v={f.frp != null ? `${f.frp.toFixed(1)} MW` : "—"} />
+                <Row k="Confianza" v={f.confidence || "—"} />
+                <Row k="Pasada" v={f.daynight === "D" ? "Diurna" : f.daynight === "N" ? "Nocturna" : "—"} />
+                <p style={{ marginTop: 6, color: "#94a3b8" }}>
+                  NASA FIRMS {f.source.replace("_", " ")} · sin armonizar (capa de detección).
+                </p>
+              </Popup>
+            </CircleMarker>
+          );
+        })}
 
       {show.iot &&
         iot.map(({ station, reading }) => (
